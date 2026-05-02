@@ -44,11 +44,13 @@ export async function GET(): Promise<Response> {
         .select("tier")
         .then(({ data }) => ({
           data: data
-            ? Object.entries(
-                data.reduce<Record<string, number>>((acc, p) => {
-                  acc[p.tier] = (acc[p.tier] ?? 0) + 1
-                  return acc
-                }, {}),
+            ? Array.from(
+                data
+                  .reduce((acc, p) => {
+                    acc.set(p.tier, (acc.get(p.tier) ?? 0) + 1)
+                    return acc
+                  }, new Map<string, number>())
+                  .entries(),
               ).map(([tier, count]) => ({ tier, count }))
             : [],
         })),

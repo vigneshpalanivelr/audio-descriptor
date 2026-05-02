@@ -25,5 +25,7 @@ export function verifyLemonSqueezySignature(
   signature: string | null,
   secret: string,
 ): boolean {
-  return verifyHmacSha256(rawBody, signature, secret)
+  // LemonSqueezy sends the signature header as "sha256=<hex>" — strip the prefix
+  const sig = signature?.startsWith("sha256=") ? signature.slice(7) : signature
+  return verifyHmacSha256(rawBody, sig, secret)
 }

@@ -41,17 +41,36 @@ describe("verifyRazorpaySignature", () => {
 })
 
 describe("verifyLemonSqueezySignature", () => {
-  it("returns true for a valid HMAC signature", () => {
+  it("returns true for a valid raw HMAC signature (no prefix)", () => {
     const sig = makeSignature(BODY, SECRET)
     expect(verifyLemonSqueezySignature(BODY, sig, SECRET)).toBe(true)
+  })
+
+  it("returns true for a valid signature with 'sha256=' prefix (LemonSqueezy wire format)", () => {
+    const hex = makeSignature(BODY, SECRET)
+    expect(verifyLemonSqueezySignature(BODY, `sha256=${hex}`, SECRET)).toBe(true)
   })
 
   it("returns false when signature is null", () => {
     expect(verifyLemonSqueezySignature(BODY, null, SECRET)).toBe(false)
   })
 
-  it("returns false for a forged signature", () => {
+  it("returns false for a forged raw signature", () => {
     const forged = "00".repeat(32)
     expect(verifyLemonSqueezySignature(BODY, forged, SECRET)).toBe(false)
+  })
+
+  it("returns false for a forged signature with sha256= prefix", () => {
+    expect(verifyLemonSqueezySignature(BODY, "sha256=" + "00".repeat(32), SECRET)).toBe(false)
+  })
+
+  it("returns false when body tampered (sha256= prefix preserved)", () => {
+    const hex = makeSignature(BODY, SECRET)
+    const tampered = BODY.replace("pay_123", "pay_EVIL")
+    expect(verifyLemonSqueezySignature(tampered, `sha256=${hex}`, SECRET)).toBe(false)
+  })
+
+  it("returns false when only the prefix 'sha256=' is sent with no hex", () => {
+    expect(verifyLemonSqueezySignature(BODY, "sha256=", SECRET)).toBe(false)
   })
 })

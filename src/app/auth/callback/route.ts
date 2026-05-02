@@ -1,11 +1,14 @@
 import { createClient } from "@/lib/supabase/server"
+import { isSafeRedirectPath } from "@/lib/security/sanitize"
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get("code")
-  const next = searchParams.get("next") ?? "/notes"
+  const nextParam = searchParams.get("next") ?? "/notes"
+  // Reject open-redirect attempts — only allow relative paths within this app
+  const next = isSafeRedirectPath(nextParam) ? nextParam : "/notes"
 
   if (code) {
     const supabase = await createClient()

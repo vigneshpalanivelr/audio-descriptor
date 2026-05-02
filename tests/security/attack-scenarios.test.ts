@@ -1,8 +1,14 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import crypto from "crypto"
 import { verifyRazorpaySignature } from "@/lib/security/webhook"
 import { checkRateLimit } from "@/lib/security/ratelimit"
-import { uuidSchema, isAllowedAudioMimeType, sanitizeText } from "@/lib/security/sanitize"
+import {
+  uuidSchema,
+  isAllowedAudioMimeType,
+  sanitizeText,
+  validateAudioUrl,
+  isSafeRedirectPath,
+} from "@/lib/security/sanitize"
 import { canRecord } from "@/lib/usage/limits"
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -90,9 +96,100 @@ describe("ATTACK: XSS via Stored Input", () => {
     // React escapes angle brackets in JSX — this test documents that guarantee
     const xssAttempt = "<img src=x onerror=alert(1)>"
     const sanitized = sanitizeText(xssAttempt)
-    // sanitizeText does not strip HTML (React does that at render time)
-    // but it does strip null bytes and control chars
     expect(sanitized).toBe(xssAttempt.trim())
+  })
+})
+
+describe("ATTACK: BiDi Trojan Source (disguising malicious content in logs/UI)", () => {
+  // Code point constants avoid literal BiDi chars in test source
+  const RLO = String.fromCodePoint(0x202e) // RIGHT-TO-LEFT OVERRIDE
+  const LRE = String.fromCodePoint(0x202a) // LEFT-TO-RIGHT EMBEDDING
+  const RLE = String.fromCodePoint(0x202b) // RIGHT-TO-LEFT EMBEDDING
+  const LRI = String.fromCodePoint(0x2066) // LEFT-TO-RIGHT ISOLATE
+  const RLI = String.fromCodePoint(0x2067) // RIGHT-TO-LEFT ISOLATE
+  const FSI = String.fromCodePoint(0x2068) // FIRST STRONG ISOLATE
+  const PDI = String.fromCodePoint(0x2069) // POP DIRECTIONAL ISOLATE
+
+  it("strips U+202E (RLO) used to disguise filenames/log entries", () => {
+    // Attacker encodes "gpj.exe" as "exe<RLO>gpj" — visually appears as "exe.gpj" but is .exe
+    const input = `exe${RLO}gpj`
+    const result = sanitizeText(input)
+    expect(result).toBe("exegpj")
+    expect(result).not.toContain(RLO)
+  })
+
+  it("strips U+202A (LRE) from user text", () => {
+    expect(sanitizeText(`hello${LRE}world`)).toBe("helloworld")
+  })
+
+  it("strips U+202B (RLE) from user text", () => {
+    expect(sanitizeText(`hello${RLE}world`)).toBe("helloworld")
+  })
+
+  it("strips all directional isolates (U+2066–U+2069)", () => {
+    for (const c of [LRI, RLI, FSI, PDI]) {
+      expect(sanitizeText(`attack${c}payload`)).toBe("attackpayload")
+    }
+  })
+})
+
+describe("ATTACK: SSRF via Audio URL", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "http://localhost:54321")
+  })
+
+  it("blocks AWS IMDS endpoint (cloud metadata SSRF)", () => {
+    expect(
+      validateAudioUrl("http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
+    ).toBe(false) // eslint-disable-line sonarjs/no-clear-text-protocols
+  })
+
+  it("blocks GCP metadata endpoint", () => {
+    expect(validateAudioUrl("http://metadata.google.internal/computeMetadata/v1/")).toBe(false) // eslint-disable-line sonarjs/no-clear-text-protocols
+  })
+
+  it("blocks localhost Redis port (port-scan via SSRF)", () => {
+    expect(validateAudioUrl("http://localhost:6379/")).toBe(false)
+  })
+
+  it("blocks localhost Postgres port (port-scan via SSRF)", () => {
+    expect(validateAudioUrl("http://127.0.0.1:5432/")).toBe(false)
+  })
+
+  it("blocks external CDN URL (not Supabase storage)", () => {
+    expect(validateAudioUrl("https://cdn.attacker.com/malware.mp3")).toBe(false)
+  })
+
+  it("allows only valid Supabase storage URLs", () => {
+    expect(
+      validateAudioUrl("http://localhost:54321/storage/v1/object/public/audio/u1/clip.webm"),
+    ).toBe(true)
+  })
+})
+
+describe("ATTACK: Open Redirect via ?next= parameter", () => {
+  it("blocks //evil.com (protocol-relative redirect)", () => {
+    expect(isSafeRedirectPath("//evil.com/phishing")).toBe(false)
+  })
+
+  it("blocks https://phishing.com", () => {
+    expect(isSafeRedirectPath("https://phishing.com")).toBe(false)
+  })
+
+  it("blocks http:// absolute URL", () => {
+    expect(isSafeRedirectPath("http://evil.com")).toBe(false) // eslint-disable-line sonarjs/no-clear-text-protocols
+  })
+
+  it("allows /notes (safe relative path)", () => {
+    expect(isSafeRedirectPath("/notes")).toBe(true)
+  })
+
+  it("allows /auth/callback (safe relative path)", () => {
+    expect(isSafeRedirectPath("/auth/callback")).toBe(true)
+  })
+
+  it("blocks empty string", () => {
+    expect(isSafeRedirectPath("")).toBe(false)
   })
 })
 
@@ -110,7 +207,6 @@ describe("ATTACK: Usage Cap Bypass", () => {
   })
 
   it("blocks negative requested minutes (attack: integer underflow)", () => {
-    // canRecord should treat 0 remaining as blocked even with tiny request
     expect(canRecord("free", 30, -999)).toBe(false)
   })
 })

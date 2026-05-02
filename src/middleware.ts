@@ -8,11 +8,24 @@ const AUTH_PATHS = ["/auth/sign-in"]
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next({ request })
   const { pathname } = request.nextUrl
+  const { method } = request
 
-  // Rate-limit write API routes
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown"
+
+  // Rate-limit audio upload/transcription routes
   if (pathname.startsWith("/api/upload") || pathname.startsWith("/api/transcribe")) {
-    const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown"
     const result = checkRateLimit(`upload:${ip}`, RATE_LIMITS.upload)
+    if (!result.allowed) {
+      return new NextResponse("Too Many Requests", {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil((result.resetAt - Date.now()) / 1000)) },
+      })
+    }
+  }
+
+  // Rate-limit sign-in POST (brute-force protection)
+  if (pathname === "/auth/sign-in" && method === "POST") {
+    const result = checkRateLimit(`signin:${ip}`, RATE_LIMITS.signIn)
     if (!result.allowed) {
       return new NextResponse("Too Many Requests", {
         status: 429,
