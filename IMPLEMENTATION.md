@@ -1,666 +1,716 @@
 # QuillCast — Implementation Reference
 
-> Living document. Update this file whenever a version changes, a new service is added, or an architectural decision is made.
-> Last updated: May 2026
+> Living document. Update whenever a version changes, a service is added, or an architectural decision is made.
+> Last updated: 2 May 2026
 
 ---
 
 ## 0. App Name
 
-The application name is centralised in one file:
+Single source of truth:
 
 ```
 src/config/app.ts  →  APP_CONFIG.name = "QuillCast"
 ```
 
-To rename the app, change only that file. Nothing else should hardcode the name.
+To rename: change only that file. Never hardcode `"QuillCast"` anywhere else.
 
 ---
 
-## 1. Architecture Overview
+## 1. High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  BROWSER                                                    │
-│  Next.js 15 App Router (React 19) + Tailwind 4 + shadcn/ui │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTPS
-┌────────────────────────▼────────────────────────────────────┐
-│  NEXT.JS SERVER  (Vercel / local dev)                       │
-│  Route Handlers + Server Actions + Middleware               │
-└────────┬───────────────┬───────────────┬────────────────────┘
-         │               │               │
-         ▼               ▼               ▼
-   ┌──────────┐    ┌──────────┐    ┌──────────────┐
-   │ Supabase │    │ Inngest  │    │   Payments   │
-   │ Postgres │    │  Queue   │    │  Razorpay /  │
-   │ Auth     │    └────┬─────┘    │ LemonSqueezy │
-   │ Storage  │         │          └──────────────┘
-   │ Realtime │    ┌────▼──────────────────────┐
-   └──────────┘    │  Background Jobs           │
-                   │  transcribe → STT API      │
-                   │  cleanup    → LLM API      │
-                   │  cost-digest → Resend      │
-                   └───┬───────────────┬────────┘
-                       ▼               ▼
-                 ┌──────────┐   ┌────────────┐
-                 │ STT APIs │   │  LLM APIs  │
-                 │ OpenAI   │   │ Anthropic  │
-                 │ Sarvam   │   │ Gemini     │
-                 │ElevenLabs│   └────────────┘
-                 └──────────┘
-```
+```mermaid
+graph TB
+    subgraph Browser["Browser (React 19 + Tailwind 4)"]
+        UI[Landing / Notes UI]
+        REC[Recorder Component\nMediaRecorder + Web Audio API]
+        FFMPEG[ffmpeg-wasm\nChunk split > 25MB]
+    end
 
-**Why not FastAPI?**
-FastAPI is considered for Phase 3 only (on-device Whisper, complex audio DSP). For Phases 1–2, Next.js API routes keep the stack to one language, one deployment, and one CI pipeline.
+    subgraph NextJS["Next.js 16 Server (Vercel)"]
+        MW[Middleware\nAuth guard + Rate limit]
+        SSR[Server Components\nSSR / RSC]
+        API[Route Handlers\n/api/*]
+    end
 
----
+    subgraph Supabase["Supabase (managed Postgres 17)"]
+        AUTH[Auth\nGoogle OAuth + Magic Link]
+        DB[(Postgres\nprofiles · notes · usage · payment_events)]
+        STORE[Storage\naudio bucket — private]
+        RT[Realtime\nnote status events]
+    end
 
-## 2. Tech Stack — Exact Versions
+    subgraph Jobs["Background Jobs — Inngest"]
+        TRANSCRIBE[transcribe.ts\naudio.uploaded event]
+        CLEANUP[cleanup.ts\nnote.transcribed event]
+        COST[cost-digest.ts\ndaily cron]
+    end
 
-| Layer                      | Library / Service               | Version                         | Notes                                                                |
-| -------------------------- | ------------------------------- | ------------------------------- | -------------------------------------------------------------------- |
-| **Runtime**                | Node.js                         | 22.x (`.nvmrc`)                 | CLAUDE.md said 20 LTS but 22 LTS is current; Next.js 15 supports 18+ |
-| **Package manager**        | pnpm                            | 10.x                            | Never use `npm install` directly                                     |
-| **Frontend framework**     | Next.js                         | 15.x (App Router)               |                                                                      |
-| **UI library**             | React                           | 19.x                            |                                                                      |
-| **Language**               | TypeScript                      | 5.x                             | Strict mode. No `any`.                                               |
-| **Styling**                | Tailwind CSS                    | 4.x                             |                                                                      |
-| **Component library**      | shadcn/ui                       | latest                          | Primitives only; we customise                                        |
-| **Database**               | Supabase (Postgres 17)          | `@supabase/supabase-js` 2.x     |                                                                      |
-| **Auth**                   | Supabase Auth                   | `@supabase/ssr` 0.x             | Cookie-based sessions                                                |
-| **Storage**                | Supabase Storage                | (same client)                   | Private bucket, signed URLs                                          |
-| **Realtime**               | Supabase Realtime               | (same client)                   | Note status updates                                                  |
-| **Background jobs**        | Inngest                         | `inngest` 3.x                   | Transcribe + cleanup pipeline                                        |
-| **STT — default**          | OpenAI `gpt-4o-mini-transcribe` | `openai` 5.x                    |                                                                      |
-| **STT — Indian languages** | Sarvam Saaras v3                | REST API                        | Feature-flagged; `ENABLE_SARVAM`                                     |
-| **STT — premium**          | ElevenLabs Scribe v2            | `elevenlabs` SDK                | Feature-flagged; `ENABLE_ELEVENLABS`                                 |
-| **LLM cleanup**            | Anthropic Claude Haiku 4.5      | `@anthropic-ai/sdk` 0.x         | Default for all users                                                |
-| **LLM cleanup (Pro)**      | Anthropic Claude Sonnet 4.6     | (same SDK)                      | Pro tier only                                                        |
-| **LLM fallback**           | Google Gemini 3 Flash           | `@google/generative-ai`         | Indian languages + long context                                      |
-| **Email**                  | Resend                          | `resend` 4.x                    |                                                                      |
-| **Payments (India)**       | Razorpay                        | `razorpay` 2.x                  | UPI AutoPay, INR                                                     |
-| **Payments (global)**      | Lemon Squeezy                   | `@lemonsqueezy/lemonsqueezy.js` | MoR, handles VAT/GST                                                 |
-| **Hosting**                | Vercel                          | —                               | Zero-config                                                          |
-| **Error monitoring**       | Sentry                          | `@sentry/nextjs` 9.x            |                                                                      |
-| **Analytics**              | PostHog                         | `posthog-js` 1.x                | Session replay off on `/notes`                                       |
-| **Audio codec**            | ffmpeg-wasm                     | `@ffmpeg/ffmpeg` 0.12.x         | Browser-side; splits >25MB chunks                                    |
-| **Unit tests**             | Vitest                          | 3.x                             | Faster than Jest; native ESM                                         |
-| **Component tests**        | React Testing Library           | 16.x                            |                                                                      |
-| **E2E / Functional tests** | Playwright                      | 1.x                             |                                                                      |
-| **Coverage**               | `@vitest/coverage-v8`           | (same version)                  | 100% threshold enforced                                              |
-| **Linter**                 | ESLint                          | 9.x (flat config)               |                                                                      |
-| **Security lint**          | `eslint-plugin-security`        | 3.x                             | Flags dangerous patterns                                             |
-| **Code quality lint**      | `eslint-plugin-sonarjs`         | 2.x                             | Cognitive complexity, duplication                                    |
-| **Formatter**              | Prettier                        | 3.x                             |                                                                      |
-| **Pre-commit hooks**       | Husky + lint-staged             | 9.x / 15.x                      | Blocks bad commits                                                   |
-| **Dependency audit**       | `pnpm audit`                    | —                               | Run in CI                                                            |
+    subgraph STT["Speech-to-Text"]
+        OAI_STT[OpenAI\ngpt-4o-mini-transcribe\ndefault]
+        SARVAM[Sarvam Saaras v3\nIndic languages\nENABLE_SARVAM]
+        ELEVEN[ElevenLabs Scribe v2\npremium\nENABLE_ELEVENLABS]
+    end
 
----
+    subgraph LLM["LLM Cleanup"]
+        HAIKU[Claude Haiku 4.5\nall tiers · default]
+        SONNET[Claude Sonnet 4.6\nPro tier · non-Indic]
+        GEMINI[Gemini 3 Flash\nfallback · long context]
+    end
 
-## 3. Local Development Setup
+    subgraph Payments["Payments"]
+        RAZOR[Razorpay\nIndia · INR]
+        LEMON[Lemon Squeezy\nGlobal · MoR · VAT/GST]
+    end
 
-### Prerequisites
+    subgraph Observability["Observability"]
+        SENTRY[Sentry\nerror tracking]
+        POSTHOG[PostHog\nanalytics]
+        PINO[Pino Logger\nrotating files + stdout]
+    end
 
-- Node.js 22 (`nvm use` or `fnm use`)
-- pnpm 10 (`npm i -g pnpm`)
-- Docker Desktop (for local Supabase)
-- Supabase CLI (`brew install supabase/tap/supabase` or `scoop install supabase`)
-
-### First-time setup
-
-```bash
-pnpm install
-cp .env.example .env.local          # fill in keys
-supabase start                       # starts Postgres + Auth + Storage + Realtime locally
-supabase db push                     # applies migrations
-pnpm dev                             # starts Next.js on :3000
-```
-
-### Supabase local URLs (after `supabase start`)
-
-| Service          | URL                                                     |
-| ---------------- | ------------------------------------------------------- |
-| API              | http://localhost:54321                                  |
-| Studio dashboard | http://localhost:54323                                  |
-| DB (Postgres)    | postgresql://postgres:postgres@localhost:54322/postgres |
-| Storage          | http://localhost:54321/storage/v1                       |
-| Auth             | http://localhost:54321/auth/v1                          |
-
-### Useful scripts
-
-```bash
-pnpm dev              # Next.js dev server
-pnpm build            # production build
-pnpm lint             # ESLint
-pnpm typecheck        # tsc --noEmit
-pnpm format           # Prettier write
-pnpm format:check     # Prettier check (used in CI)
-pnpm test             # Vitest unit tests
-pnpm test:watch       # Vitest watch mode
-pnpm test:coverage    # Vitest with coverage report
-pnpm test:e2e         # Playwright E2E
-pnpm test:e2e:ui      # Playwright with UI mode
-pnpm test:security    # Security-focused test suite
+    UI -->|HTTPS| MW
+    REC --> FFMPEG --> API
+    MW --> SSR & API
+    SSR --> AUTH & DB
+    API --> AUTH & DB & STORE
+    API -->|audio.uploaded event| Jobs
+    TRANSCRIBE --> STT
+    CLEANUP --> LLM
+    CLEANUP --> DB
+    TRANSCRIBE --> DB
+    DB --> RT -->|WebSocket| UI
+    API --> RAZOR & LEMON
+    RAZOR & LEMON -->|webhooks| API
+    API --> SENTRY
+    SSR --> POSTHOG
+    NextJS --> PINO
 ```
 
 ---
 
-## 4. Folder Structure
+## 2. Request & Auth Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Browser
+    participant Middleware
+    participant RouteHandler as Route Handler
+    participant Supabase
+
+    User->>Browser: navigate to /notes
+    Browser->>Middleware: GET /notes (with cookies)
+    Middleware->>Supabase: auth.getUser() [re-validates JWT]
+    alt no session
+        Supabase-->>Middleware: user = null
+        Middleware-->>Browser: 302 → /auth/sign-in
+    else valid session
+        Supabase-->>Middleware: user = { id, email }
+        Middleware-->>Browser: 200 (pass-through)
+        Browser->>RouteHandler: renders /notes page
+        RouteHandler->>Supabase: query notes WHERE user_id = $1 [RLS enforced]
+        Supabase-->>RouteHandler: rows for this user only
+        RouteHandler-->>Browser: SSR HTML
+    end
+
+    Note over Middleware,RouteHandler: Defence-in-depth: auth checked in both layers
+```
+
+---
+
+## 3. Note Processing Pipeline
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant App as Next.js App
+    participant Supabase
+    participant Inngest
+    participant STT as STT API
+    participant LLM as LLM API
+
+    User->>App: Record audio (MediaRecorder)
+    App->>App: ffmpeg-wasm splits > 25MB
+    App->>Supabase: upload chunk → audio/ bucket
+    App->>App: POST /api/upload (validate + usage check)
+    App->>Supabase: INSERT notes {status: pending}
+    App->>Inngest: send audio.uploaded event
+    Inngest-->>App: 202 queued
+    Supabase-->>App: Realtime: status=pending
+
+    Inngest->>STT: transcribeWithOpenAI / Sarvam / ElevenLabs
+    STT-->>Inngest: { transcript, language, durationSeconds }
+    Inngest->>Supabase: UPDATE notes {transcript_raw, status: cleaning}
+    Supabase-->>App: Realtime: status=cleaning
+
+    Inngest->>LLM: runCleanup(transcript, intensity, tier)
+    LLM-->>Inngest: { summary, model, costUsd }
+    Inngest->>Supabase: UPDATE notes {summary, status: ready}
+    Inngest->>Supabase: UPSERT usage {minutes_used += N}
+    Supabase-->>App: Realtime: status=ready
+
+    App-->>User: Note ready — transcript + summary shown
+```
+
+---
+
+## 4. STT Routing Decision Tree
+
+```mermaid
+flowchart TD
+    START([audio.uploaded event]) --> ELEVEN_PREM{ENABLE_ELEVENLABS\nAND\nELEVENLABS_PREMIUM?}
+    ELEVEN_PREM -->|yes| ELEVEN[ElevenLabs Scribe v2\nall languages]
+    ELEVEN_PREM -->|no| SARVAM_FLAG{ENABLE_SARVAM?}
+    SARVAM_FLAG -->|no| OPENAI[OpenAI\ngpt-4o-mini-transcribe]
+    SARVAM_FLAG -->|yes| INDIC{isIndianLanguage\nlanguage?}
+    INDIC -->|yes| SARVAM[Sarvam Saaras v3]
+    INDIC -->|no| OPENAI
+
+    ELEVEN --> RESULT([TranscribeResult])
+    SARVAM --> RESULT
+    OPENAI --> RESULT
+```
+
+---
+
+## 5. LLM Routing & Cleanup
+
+```mermaid
+flowchart TD
+    START([note.transcribed event]) --> TIER{User tier?}
+    TIER -->|free / starter| HAIKU[Claude Haiku 4.5]
+    TIER -->|pro / pro_plus_local| LANG{isIndianLanguage\noutputLanguage?}
+    LANG -->|yes| HAIKU
+    LANG -->|no| SONNET[Claude Sonnet 4.6]
+
+    HAIKU --> INTENSITY
+    SONNET --> INTENSITY
+
+    INTENSITY{intensity?} -->|verbatim| VP[buildVerbatimPrompt]
+    INTENSITY -->|light| LP[buildLightCleanupPrompt]
+    INTENSITY -->|full| FP[buildFullRewritePrompt]
+
+    VP & LP & FP --> API[Anthropic messages.create]
+    API --> RESULT([summary · model · costUsd])
+```
+
+---
+
+## 6. Security Architecture
+
+```mermaid
+graph TB
+    subgraph Internet["Internet (untrusted)"]
+        ATTACKER[Attacker]
+        USER[User Browser]
+    end
+
+    subgraph Edge["Edge / CDN (Vercel)"]
+        HEADERS[HTTP Security Headers\nCSP · HSTS · X-Frame-Options\nX-Content-Type-Options\nPermissions-Policy · Referrer-Policy]
+    end
+
+    subgraph Middleware["Next.js Middleware"]
+        RL_UPLOAD[Rate limit\n/api/upload · /api/transcribe\n10 req/min/IP]
+        RL_SIGNIN[Rate limit\nPOST /auth/sign-in\n5 req/min/IP]
+        AUTH_CHECK[Auth guard\nsupabase.auth.getUser\nre-validates JWT]
+    end
+
+    subgraph RouteLayer["Route Handlers"]
+        AUTH2[Auth + admin check\ndefence-in-depth]
+        ZOD[Zod validation\nall inputs at boundary]
+        UUID[UUID schema\npath param guard]
+        MIME[MIME allowlist\naudio only]
+        AUDIO_URL[validateAudioUrl\nSSRF prevention]
+        REDIRECT[isSafeRedirectPath\nopen redirect prevention]
+        CSRF[Origin check\nCSRF on sign-out]
+        HMAC[HMAC-SHA256\ntiming-safe compare\nRazorpay + LemonSqueezy]
+        BIDI[sanitizeText\nBiDi override strip\nnull byte strip]
+    end
+
+    subgraph DB["Supabase / DB Layer"]
+        RLS[Row Level Security\nall 4 tables\nusers see only own rows]
+        PARAM[Parameterised queries\nno raw SQL]
+        MAP[Map accumulator\nno object injection]
+    end
+
+    ATTACKER -->|SSRF attempt| AUDIO_URL
+    ATTACKER -->|Open redirect| REDIRECT
+    ATTACKER -->|Webhook spoof| HMAC
+    ATTACKER -->|CSRF sign-out| CSRF
+    ATTACKER -->|BiDi trojan source| BIDI
+    ATTACKER -->|Rate abuse| RL_UPLOAD & RL_SIGNIN
+    ATTACKER -->|No session| AUTH_CHECK
+    ATTACKER -->|Non-admin| AUTH2
+    ATTACKER -->|SQL injection| ZOD & PARAM
+    ATTACKER -->|IDOR| UUID & RLS
+
+    USER --> HEADERS --> Middleware --> RouteLayer --> DB
+```
+
+---
+
+## 7. Database Schema
+
+```mermaid
+erDiagram
+    profiles {
+        uuid id PK "auth.users FK"
+        text display_name
+        text default_language
+        text default_intensity
+        text default_stt_engine
+        text default_llm_model
+        text ui_locale
+        text tier "free|starter|pro|pro_plus_local"
+        text subscription_status
+        text subscription_provider
+        text subscription_ref
+        boolean is_admin
+        int login_count
+        timestamptz last_seen_at
+        timestamptz created_at
+    }
+
+    notes {
+        uuid id PK
+        uuid user_id FK
+        text title
+        text transcript_raw
+        text summary
+        text audio_storage_path
+        numeric audio_duration_sec
+        text language_detected
+        text language_output
+        text intensity "verbatim|light|full"
+        text stt_engine
+        text llm_model
+        text status "pending|transcribing|cleaning|ready|failed"
+        text error
+        numeric cost_usd
+        text[] tags
+        boolean is_starred
+        boolean is_archived
+        timestamptz created_at
+        timestamptz ready_at
+    }
+
+    usage {
+        uuid id PK
+        uuid user_id FK
+        text month "YYYY-MM"
+        numeric minutes_used
+        int notes_count
+        numeric cost_usd
+        timestamptz updated_at
+    }
+
+    payment_events {
+        uuid id PK
+        uuid user_id FK
+        text provider "razorpay|lemonsqueezy"
+        text event_type
+        text external_event_id "idempotency key"
+        jsonb payload
+        timestamptz created_at
+    }
+
+    audit_logs {
+        uuid id PK
+        uuid user_id
+        text event_type
+        text resource_type
+        text resource_id
+        text ip_address
+        text user_agent
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    user_sessions {
+        uuid id PK
+        uuid user_id FK
+        timestamptz logged_in_at
+        timestamptz logged_out_at
+        boolean is_active
+        text ip_address
+    }
+
+    profiles ||--o{ notes : "owns"
+    profiles ||--o{ usage : "tracks"
+    profiles ||--o{ payment_events : "triggers"
+    profiles ||--o{ audit_logs : "generates"
+    profiles ||--o{ user_sessions : "creates"
+```
+
+---
+
+## 8. CI Pipeline
+
+```mermaid
+graph LR
+    PUSH[git push] --> QUALITY
+
+    subgraph Stage1["Stage 1 — parallel"]
+        QUALITY[Lint + Format\n+ Typecheck]
+        AUDIT[Dependency\nAudit\npnpm audit --high]
+    end
+
+    QUALITY --> SHELL[Shell Tests\nmanage.test.sh\n70 tests]
+    QUALITY --> UNIT[Unit + Integration\n+ Coverage\n100% threshold]
+    QUALITY --> SEC[Security Tests\n51 attack scenarios]
+
+    SHELL & UNIT & SEC --> E2E[E2E Tests\nPlaywright chromium\ngolden path smoke]
+    AUDIT --> GREEN
+
+    E2E --> GREEN[all-green ✓\nPR can merge]
+
+    style GREEN fill:#16a34a,color:#fff
+    style QUALITY fill:#2563eb,color:#fff
+    style AUDIT fill:#2563eb,color:#fff
+```
+
+---
+
+## 9. Tech Stack — Exact Versions
+
+| Layer                   | Library / Service               | Version                             | Notes                       |
+| ----------------------- | ------------------------------- | ----------------------------------- | --------------------------- |
+| **Runtime**             | Node.js                         | 22.x (`.nvmrc`)                     |                             |
+| **Package manager**     | pnpm                            | 10.x                                | Never `npm install`         |
+| **Frontend framework**  | Next.js                         | **16.2.4** (App Router)             |                             |
+| **UI library**          | React                           | 19.2.4                              |                             |
+| **Language**            | TypeScript                      | 5.x strict                          | No `any`                    |
+| **Styling**             | Tailwind CSS                    | 4.x                                 |                             |
+| **DB / Auth / Storage** | Supabase                        | `@supabase/supabase-js` 2.x         | Postgres 17 + RLS           |
+| **Auth SSR**            | `@supabase/ssr`                 | 0.6.x                               | Cookie-based sessions       |
+| **Background jobs**     | Inngest                         | 3.x                                 | transcribe + cleanup + cron |
+| **STT — default**       | OpenAI `gpt-4o-mini-transcribe` | `openai` 5.x                        |                             |
+| **STT — Indic**         | Sarvam Saaras v3                | REST                                | `ENABLE_SARVAM` flag        |
+| **STT — premium**       | ElevenLabs Scribe v2            | REST                                | `ENABLE_ELEVENLABS` flag    |
+| **LLM — default**       | Claude Haiku 4.5                | `@anthropic-ai/sdk` 0.52.x          | `claude-haiku-4-5-20251001` |
+| **LLM — Pro**           | Claude Sonnet 4.6               | (same)                              | `claude-sonnet-4-6`         |
+| **LLM — fallback**      | Gemini 3 Flash                  | `@google/generative-ai` 0.24.x      | Long context                |
+| **Payments (India)**    | Razorpay                        | `razorpay` 2.x                      | UPI AutoPay, INR            |
+| **Payments (global)**   | Lemon Squeezy                   | `@lemonsqueezy/lemonsqueezy.js` 4.x | MoR — handles VAT/GST       |
+| **Error monitoring**    | Sentry                          | `@sentry/nextjs` 9.x                |                             |
+| **Analytics**           | PostHog                         | `posthog-js` 1.x                    | Replay off on `/notes`      |
+| **Logging**             | Pino                            | 10.x + rotating-file-stream         | PII redacted in 34 fields   |
+| **Audio codec**         | ffmpeg-wasm                     | `@ffmpeg/ffmpeg` 0.12.x             | Browser-side chunk split    |
+| **Unit tests**          | Vitest                          | 3.x                                 | Native ESM, workers         |
+| **Component tests**     | React Testing Library           | 16.x                                |                             |
+| **E2E**                 | Playwright                      | 1.x                                 | Chromium only in CI         |
+| **Coverage**            | `@vitest/coverage-v8`           | 3.x                                 | 100% threshold enforced     |
+| **Linter**              | ESLint                          | 9.x flat config                     |                             |
+| **Security lint**       | `eslint-plugin-security`        | 3.x                                 | Flags dangerous patterns    |
+| **Code quality lint**   | `eslint-plugin-sonarjs`         | 4.x                                 | Cognitive complexity        |
+| **Formatter**           | Prettier                        | 3.x                                 |                             |
+| **Pre-commit hooks**    | Husky + lint-staged             | 9.x / 15.x                          |                             |
+
+---
+
+## 10. Folder Structure (current state)
 
 ```
 src/
 ├── app/
-│   ├── (marketing)/          # Public pages (SSR for SEO)
-│   │   ├── page.tsx          # Landing page
-│   │   ├── pricing/page.tsx
-│   │   └── hi/page.tsx       # Hindi landing
-│   ├── (app)/                # Authenticated app
-│   │   ├── layout.tsx        # Auth guard
-│   │   └── notes/
-│   │       ├── page.tsx      # Notes list
-│   │       ├── new/page.tsx  # Recorder
-│   │       └── [id]/page.tsx # Single note
+│   ├── (admin)/
+│   │   └── admin/page.tsx          ✅ Admin dashboard — double auth guard
+│   ├── (app)/
+│   │   ├── layout.tsx              ✅ Auth guard layout (server component)
+│   │   └── notes/page.tsx          ✅ Empty state + "New Note" stub
 │   ├── api/
-│   │   ├── upload/route.ts
-│   │   ├── inngest/route.ts
-│   │   └── webhooks/
-│   │       ├── razorpay/route.ts
-│   │       └── lemonsqueezy/route.ts
-│   └── auth/
-│       ├── callback/route.ts
-│       └── sign-in/page.tsx
-├── components/
-│   ├── ui/                   # shadcn primitives
-│   ├── recording/            # Recorder, Waveform, Timer
-│   ├── notes/                # NoteCard, NoteView, IntensitySelect
-│   └── marketing/
+│   │   ├── admin/
+│   │   │   ├── stats/route.ts      ✅ Admin stats (auth + admin check)
+│   │   │   └── users/route.ts      ✅ Paginated users (Zod-validated params)
+│   │   └── [upload, inngest, webhooks — Session 3–5]
+│   ├── auth/
+│   │   ├── callback/route.ts       ✅ PKCE code exchange + safe redirect
+│   │   ├── sign-in/
+│   │   │   ├── page.tsx            ✅ Server component with redirect guard
+│   │   │   └── SignInForm.tsx      ✅ Google OAuth + magic link (client)
+│   │   └── sign-out/route.ts       ✅ POST handler + CSRF origin check
+│   ├── error.tsx                   ✅ Error boundary
+│   ├── global-error.tsx            ✅ Root error boundary
+│   ├── layout.tsx                  ✅ Root layout (Geist font + metadata)
+│   └── page.tsx                    ✅ Landing page (hero, pricing, FAQ)
 ├── config/
-│   └── app.ts                # APP_CONFIG — single source of app name + metadata
+│   └── app.ts                      ✅ APP_CONFIG — single source of name
 ├── lib/
-│   ├── supabase/
-│   │   ├── client.ts         # browser client
-│   │   ├── server.ts         # server client (cookies)
-│   │   └── service.ts        # service-role (Inngest only)
-│   ├── stt/
-│   │   ├── types.ts
-│   │   ├── openai.ts
-│   │   ├── sarvam.ts
-│   │   ├── elevenlabs.ts
-│   │   ├── languages.ts      # INDIAN_LANGUAGES
-│   │   └── route.ts          # routing decision tree
+│   ├── api/error.ts                ✅ Typed API errors + Zod formatter
 │   ├── llm/
-│   │   ├── anthropic.ts
-│   │   ├── gemini.ts
-│   │   ├── route.ts
-│   │   └── prompts/
-│   │       ├── verbatim.ts
-│   │       ├── light-cleanup.ts
-│   │       ├── full-rewrite.ts
-│   │       ├── title.ts
-│   │       └── write-like-me.ts
-│   ├── payments/
-│   │   ├── razorpay.ts
-│   │   └── lemonsqueezy.ts
-│   ├── usage/
-│   │   └── limits.ts
-│   └── security/
-│       ├── webhook.ts        # signature verification (Razorpay + LemonSqueezy)
-│       ├── ratelimit.ts      # per-IP and per-user rate limiting
-│       └── sanitize.ts       # input sanitisation helpers
-├── inngest/
-│   ├── client.ts
-│   └── functions/
-│       ├── transcribe.ts
-│       ├── cleanup.ts
-│       └── cost-digest.ts
-├── middleware.ts              # auth guard + rate limit headers
-└── types/
-    └── index.ts
+│   │   ├── route.ts                ✅ Model selection + runCleanup + generateTitle
+│   │   └── prompts/                ✅ verbatim · light · full · title · write-like-me
+│   ├── logger/
+│   │   ├── index.ts                ✅ Pino + PII redaction (34 fields) + child loggers
+│   │   └── audit.ts                ✅ 30+ event types · DB persistence · user masking
+│   ├── security/
+│   │   ├── ratelimit.ts            ✅ In-memory rate limiter + RATE_LIMITS config
+│   │   ├── sanitize.ts             ✅ UUID/MIME/text/audioUrl/redirect validators + BiDi strip
+│   │   └── webhook.ts              ✅ HMAC-SHA256 timing-safe + LemonSqueezy sha256= prefix
+│   ├── stt/
+│   │   ├── route.ts                ✅ Routing decision tree
+│   │   ├── languages.ts            ✅ INDIAN_LANGUAGES constant
+│   │   ├── types.ts                ✅ TranscribeRequest / TranscribeResult
+│   │   ├── openai.ts               ✅ gpt-4o-mini-transcribe adapter
+│   │   ├── sarvam.ts               ✅ Saaras v3 adapter (feature-flagged)
+│   │   └── elevenlabs.ts           ✅ Scribe v2 adapter (feature-flagged)
+│   ├── supabase/
+│   │   ├── client.ts               ✅ Browser client
+│   │   ├── server.ts               ✅ Server client (SSR cookies)
+│   │   └── service.ts              ✅ Service-role (Inngest jobs only)
+│   └── usage/limits.ts             ✅ Tier caps · canRecord · getNoteDurationLimit
+├── middleware.ts                   ✅ Auth guard + rate limit (upload + sign-in routes)
+└── types/index.ts                  ✅ Shared types (UserTier, Note, Profile, etc.)
+
 tests/
-├── unit/                     # Vitest unit tests (mirror src/ structure)
-├── integration/              # Vitest API route tests
-├── security/                 # Vitest security scenario tests
-├── e2e/                      # Playwright functional tests
-└── fixtures/                 # shared test data and mocks
+├── unit/lib/
+│   ├── api/error.test.ts           ✅ 20 tests
+│   ├── llm/route.test.ts           ✅ 14 tests
+│   ├── llm/prompts.test.ts         ✅ 14 tests
+│   ├── logger/audit.test.ts        ✅ 17 tests
+│   ├── logger/index.test.ts        ✅ 10 tests
+│   ├── security/ratelimit.test.ts  ✅ 4 tests
+│   ├── security/sanitize.test.ts   ✅ 40 tests (incl. SSRF + open redirect + BiDi)
+│   ├── security/webhook.test.ts    ✅ 13 tests (incl. sha256= prefix)
+│   ├── stt/route.test.ts           ✅ 9 tests
+│   ├── stt/languages.test.ts       ✅ 5 tests
+│   └── usage/limits.test.ts        ✅ 25 tests
+├── security/
+│   ├── attack-scenarios.test.ts    ✅ 42 attack scenarios
+│   └── admin-access-control.test.ts ✅ 10 scenarios
+├── shell/
+│   └── manage.test.sh              ✅ 70 bash unit tests
+└── e2e/
+    └── smoke.test.ts               ✅ Landing page + auth smoke
 ```
 
 ---
 
-## 5. App Name Config
+## 11. Security Hardening — Implemented
 
-```typescript
-// src/config/app.ts
-export const APP_CONFIG = {
-  name: "QuillCast",
-  tagline: "Speak your thoughts. QuillCast writes them.",
-  url: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-  supportEmail: "hello@quillcast.app",
-  social: {
-    twitter: "https://x.com/quillcast",
-  },
-} as const
-
-export type AppConfig = typeof APP_CONFIG
+```mermaid
+graph LR
+    subgraph Fixed["Vulnerabilities Fixed"]
+        V1["CRITICAL: Open Redirect\n?next= param validated\nisSafeRedirectPath()"]
+        V2["CRITICAL: SSRF\naudioUrl origin allowlist\nvalidateAudioUrl()"]
+        V3["HIGH: Missing HTTP Headers\nCSP · HSTS · X-Frame-Options\nnext.config.ts headers()"]
+        V4["HIGH: CSRF on sign-out\nOrigin header check\n403 on cross-origin POST"]
+        V5["HIGH: LemonSqueezy sig bug\nsha256= prefix stripped\nbefore HMAC compare"]
+        V6["MEDIUM: BiDi smuggling\nU+202A–202E U+2066–2069\nstripped from user text"]
+        V7["MEDIUM: Auth brute-force\nPOST /auth/sign-in rate limited\n5 req/min/IP"]
+        V8["MEDIUM: Stale JWT\ngetUser() replaces getSession()\nin admin page"]
+    end
 ```
 
-Usage everywhere: `import { APP_CONFIG } from "@/config/app"` — never hardcode `"QuillCast"`.
+| ID  | Severity | Vulnerability                    | File fixed                 | Test file                                       |
+| --- | -------- | -------------------------------- | -------------------------- | ----------------------------------------------- |
+| V1  | CRITICAL | Open redirect via `?next=` param | `auth/callback/route.ts`   | `sanitize.test.ts`                              |
+| V2  | CRITICAL | SSRF via unvalidated `audioUrl`  | `lib/security/sanitize.ts` | `sanitize.test.ts` · `attack-scenarios.test.ts` |
+| V3  | HIGH     | No HTTP security headers         | `next.config.ts`           | — (verified by curl)                            |
+| V4  | HIGH     | CSRF on POST `/auth/sign-out`    | `auth/sign-out/route.ts`   | —                                               |
+| V5  | HIGH     | LemonSqueezy webhook bypass      | `lib/security/webhook.ts`  | `webhook.test.ts`                               |
+| V6  | MEDIUM   | BiDi trojan-source injection     | `lib/security/sanitize.ts` | `sanitize.test.ts` · `attack-scenarios.test.ts` |
+| V7  | MEDIUM   | Auth routes not rate-limited     | `middleware.ts`            | `attack-scenarios.test.ts`                      |
+| V8  | MEDIUM   | `getSession()` in admin page     | `(admin)/admin/page.tsx`   | `admin-access-control.test.ts`                  |
 
 ---
 
-## 6. Coding Standards
+## 12. Implementation Progress
 
-### TypeScript
+### Session 1 — Project Scaffold ✅ Complete
 
-- `strict: true` — no exceptions
-- No `any`. Use `unknown` + type guards at boundaries.
-- Prefer `type` over `interface` for object shapes.
-- All API route handlers must define explicit return types.
-- Zod for all external input validation (API bodies, webhook payloads, env vars).
+| Deliverable                                                                    | Status | Notes                                         |
+| ------------------------------------------------------------------------------ | ------ | --------------------------------------------- |
+| Next.js 16 + TypeScript + Tailwind 4 + pnpm                                    | ✅     | `package.json` — exact versions locked        |
+| Folder structure per plan                                                      | ✅     | Matches §10 above                             |
+| `.env.example` with all keys                                                   | ✅     | All 20+ variables documented                  |
+| Supabase clients (browser · server · service-role)                             | ✅     | `src/lib/supabase/`                           |
+| DB migration — 4 tables + RLS + indexes + triggers                             | ✅     | `supabase/migrations/20260501000000_init.sql` |
+| STT adapters (OpenAI · Sarvam · ElevenLabs)                                    | ✅     | Feature-flagged; stubs ready                  |
+| LLM routing + 5 prompts                                                        | ✅     | `src/lib/llm/`                                |
+| Security lib (webhook · ratelimit · sanitize)                                  | ✅     | All attack vectors covered                    |
+| Usage limits + Zod enforcement                                                 | ✅     | Tier caps + 90-min sanity cap                 |
+| Middleware (auth guard + rate limiting)                                        | ✅     | Upload + sign-in routes limited               |
+| ESLint flat config (security + sonarjs)                                        | ✅     | 0 errors/warnings                             |
+| Husky + lint-staged + pre-push test hook                                       | ✅     |                                               |
+| GitHub Actions CI pipeline                                                     | ✅     | 6 jobs → all-green gate                       |
+| Structured logging + PII redaction                                             | ✅     | 34 fields redacted                            |
+| Audit event system (30+ types)                                                 | ✅     | DB-persisted + console                        |
+| Admin dashboard + admin API routes                                             | ✅     | Double auth guard                             |
+| API error standard + Zod error formatter                                       | ✅     |                                               |
+| Error boundaries (error.tsx + global-error.tsx)                                | ✅     |                                               |
+| `manage.sh` — start · stop · restart · install · config · stats · admin · logs | ✅     | Spinner + coloured output                     |
+| Shell unit tests (manage.test.sh)                                              | ✅     | 70 tests                                      |
+| Unit tests — 100% coverage across all 4 metrics                                | ✅     | 223 tests                                     |
+| Security attack tests                                                          | ✅     | 51 scenarios across 2 suites                  |
+| **Red-team security audit + 8 CVE fixes**                                      | ✅     | See §11                                       |
 
-### React / Next.js
+### Session 2 — Landing Page + Auth ✅ Complete
 
-- Server components by default. `"use client"` only when you need state, refs, effects, or browser APIs.
-- DB access only in server components, server actions, or route handlers — never in client components.
-- No prop drilling beyond 2 levels — use server component composition instead.
+| Deliverable                                           | Status | Notes                            |
+| ----------------------------------------------------- | ------ | -------------------------------- |
+| Landing page (`/`) — hero, pricing table, FAQ, footer | ✅     | `src/app/page.tsx`               |
+| Root layout metadata from `APP_CONFIG`                | ✅     | `src/app/layout.tsx`             |
+| Sign-in page — Google OAuth + magic link              | ✅     | `src/app/auth/sign-in/`          |
+| OAuth callback route (PKCE + safe redirect)           | ✅     | `src/app/auth/callback/route.ts` |
+| Sign-out route (POST + CSRF guard)                    | ✅     | `src/app/auth/sign-out/route.ts` |
+| Authenticated `(app)` layout (server auth guard)      | ✅     | `src/app/(app)/layout.tsx`       |
+| `/notes` empty state + "New Note" stub                | ✅     | `src/app/(app)/notes/page.tsx`   |
+| Hindi landing page (`/hi`)                            | ⏳     | Deferred to Session 2b           |
+| Onboarding language selector                          | ⏳     | Deferred to Session 3            |
 
-### File naming
+### Session 3 — Recorder UI + Upload ⏳ Pending
 
-- Components: `PascalCase.tsx`
-- Utilities / lib: `kebab-case.ts`
-- Tests: `*.test.ts` (unit/integration), `*.spec.ts` (e2e)
+| Deliverable                                                 | Status |
+| ----------------------------------------------------------- | ------ |
+| `MediaRecorder` component (webm/opus + Safari mp4 fallback) | ⏳     |
+| Live waveform (`AnalyserNode`) + timer + pause/resume       | ⏳     |
+| Verbatim / Light / Full intensity radio selector            | ⏳     |
+| Language pill with auto-detect + manual override            | ⏳     |
+| Hard server-side cap enforcement before upload              | ⏳     |
+| `ffmpeg-wasm` chunk split for files > 25MB                  | ⏳     |
+| `/api/upload` route handler                                 | ⏳     |
 
-### Commits
+### Session 4 — Inngest Pipeline ⏳ Pending
 
-- Imperative mood, ≤72 chars.
-- Prefix: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `security:`.
+| Deliverable                                      | Status |
+| ------------------------------------------------ | ------ |
+| Inngest client + `transcribe.ts` function        | ⏳     |
+| `cleanup.ts` function (LLM routing)              | ⏳     |
+| `/api/inngest` webhook handler                   | ⏳     |
+| Supabase Realtime → live status on client        | ⏳     |
+| Cost guard: check daily spend cap before queuing | ⏳     |
 
----
+### Session 5 — Notes + Payments + Observability ⏳ Pending
 
-## 7. Linting & Formatting Configuration
+| Deliverable                                                 | Status |
+| ----------------------------------------------------------- | ------ |
+| Notes list view (cards + status badges)                     | ⏳     |
+| Single note view (side-by-side transcript ↔ summary)        | ⏳     |
+| Edit summary in-place + regenerate with different intensity | ⏳     |
+| Razorpay checkout + webhook handler                         | ⏳     |
+| Lemon Squeezy checkout + webhook handler                    | ⏳     |
+| Idempotent `payment_events` inserts                         | ⏳     |
+| PostHog wiring (session replay off on `/notes`)             | ⏳     |
+| Sentry error boundary + DSN                                 | ⏳     |
+| `cost-digest.ts` cron — daily email via Resend              | ⏳     |
+| Daily company spend cap ($20) pre-flight check              | ⏳     |
 
-### ESLint (flat config — `eslint.config.mjs`)
+### Phase 2 — Competitive Parity (Weeks 5–10)
 
-```
-Plugins used:
-  @typescript-eslint/recommended   — TS best practices
-  eslint-plugin-security           — flags eval, dangerouslySetInnerHTML, ReDoS patterns
-  eslint-plugin-sonarjs            — cognitive complexity, duplicate code
-  @next/eslint-plugin-next         — Next.js specific rules
-  eslint-plugin-react-hooks        — rules of hooks
-  eslint-plugin-playwright         — Playwright best practices (test files only)
-```
+_(Detailed breakdown added when Phase 1 ships)_
 
-### Prettier (`.prettierrc`)
-
-```json
-{
-  "semi": false,
-  "singleQuote": false,
-  "trailingComma": "all",
-  "printWidth": 100,
-  "tabWidth": 2
-}
-```
-
-### Husky + lint-staged
-
-Pre-commit hook runs on every `git commit`:
-
-```
-*.{ts,tsx}  →  eslint --fix  →  prettier --write  →  tsc --noEmit (affected files)
-*.{json,md} →  prettier --write
-```
-
-Pre-push hook runs:
-
-```
-pnpm test (unit + integration, not e2e — too slow for pre-push)
-```
-
----
-
-## 8. Testing Strategy
-
-### Philosophy: Test as an attacker would
-
-Every test suite has a `security/` group. We assume the application **will be attacked** and write tests that simulate real attack patterns. A passing security test means the attack was **blocked**, not that it succeeded.
-
-### Test layers
-
-| Layer            | Tool                 | What it tests                                                 | Coverage target              |
-| ---------------- | -------------------- | ------------------------------------------------------------- | ---------------------------- |
-| Unit             | Vitest               | Pure functions, lib utilities, prompt builders, routing logic | 100%                         |
-| Component        | Vitest + RTL         | React components in isolation                                 | 100% meaningful paths        |
-| Integration      | Vitest + `next/test` | API route handlers (mocked Supabase + external APIs)          | 100%                         |
-| E2E / Functional | Playwright           | Full user journeys in a real browser against local Supabase   | Golden path + key edge cases |
-| Security         | Vitest + Playwright  | Attack simulations (see §9)                                   | All scenarios listed in §9   |
-
-### Coverage enforcement
-
-```typescript
-// vitest.config.ts
-coverage: {
-  provider: "v8",
-  thresholds: {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  exclude: [
-    "src/app/**/*.tsx",   // Next.js pages — covered by Playwright
-    "src/components/ui/", // shadcn primitives — not our code
-    "**/*.d.ts",
-    "**/types/**",
-  ],
-}
-```
-
-### Mocking rules
-
-- External API calls (OpenAI, Anthropic, Sarvam) are **always mocked** in unit/integration tests — never hit real APIs in CI.
-- Supabase is mocked via `supabase-mock` or manual stubs in unit tests; local Supabase instance is used for E2E.
-- Inngest functions are tested by calling the handler function directly, not through the queue.
-
----
-
-## 9. Security Test Scenarios
-
-Every scenario below has a corresponding test. Tests are in `tests/security/`.
-
-### Authentication & Authorization
-
-| Scenario                                           | Attack type            | Expected result                       |
-| -------------------------------------------------- | ---------------------- | ------------------------------------- |
-| Access `/notes` without session cookie             | Unauthenticated access | Redirect to sign-in (middleware)      |
-| Forge a session cookie with random JWT             | JWT tampering          | 401 from Supabase; middleware rejects |
-| Access another user's note by ID                   | IDOR                   | 404 (RLS returns no rows)             |
-| Call `/api/upload` without auth header             | Unauthenticated API    | 401                                   |
-| Replay a valid expired JWT                         | Token replay           | 401 (Supabase validates expiry)       |
-| Access service-role key route without service role | Privilege escalation   | 403                                   |
-
-### Input Validation & Injection
-
-| Scenario                                          | Attack type           | Expected result                                      |
-| ------------------------------------------------- | --------------------- | ---------------------------------------------------- |
-| POST `title: "<script>alert(1)</script>"` to note | XSS                   | Stored as escaped string; React never executes it    |
-| POST `user_id: "'; DROP TABLE notes;--"`          | SQL injection         | Rejected by Zod; Supabase uses parameterized queries |
-| Upload `.exe` file renamed to `.webm`             | Malicious file upload | Rejected by MIME type check before storage           |
-| Upload 200MB audio file on Free tier              | Oversized upload      | 413 before reaching storage                          |
-| Note ID with path traversal `../../etc/passwd`    | Path traversal        | Rejected by UUID validation (Zod)                    |
-| POST body with 10MB JSON payload                  | JSON bomb             | 413 from Next.js body size limit                     |
-
-### Webhooks
-
-| Scenario                                                  | Attack type          | Expected result                                             |
-| --------------------------------------------------------- | -------------------- | ----------------------------------------------------------- |
-| POST to `/api/webhooks/razorpay` without signature header | Webhook spoofing     | 401 — signature missing                                     |
-| POST with a forged HMAC signature                         | Signature bypass     | 401 — HMAC mismatch                                         |
-| Replay a valid webhook payload                            | Replay attack        | Idempotency check on `external_event_id`; no double-upgrade |
-| POST valid payload but wrong event type                   | Event type confusion | Ignored — unhandled event type logged, 200 returned         |
-
-### Rate Limiting
-
-| Scenario                                                 | Attack type             | Expected result                  |
-| -------------------------------------------------------- | ----------------------- | -------------------------------- |
-| 100 requests to `/api/upload` in 10 seconds from same IP | Brute force / DoS       | 429 after threshold              |
-| 50 sign-in attempts from same IP in 1 minute             | Credential stuffing     | 429 from middleware rate limiter |
-| Concurrent uploads exceeding per-user minute cap         | Quota abuse             | 402 — limit enforced server-side |
-| 10 account signups from same IP in 1 hour                | Burner account creation | 429 from IP rate limiter         |
-
-### Data Privacy
-
-| Scenario                                                | Attack type          | Expected result                                |
-| ------------------------------------------------------- | -------------------- | ---------------------------------------------- |
-| `GET /api/upload` leaks signed URL without auth         | Signed URL exposure  | 401 before URL is generated                    |
-| Audio storage path accessed directly without signed URL | Direct bucket access | 403 — bucket is private                        |
-| PII appears in Sentry breadcrumbs                       | Telemetry data leak  | Sentry payload scrubbed — no transcripts       |
-| `console.log(transcript)` in production                 | Log data leak        | ESLint `no-console` rule blocks this at commit |
-
-### Business Logic
-
-| Scenario                                                       | Attack type         | Expected result                                   |
-| -------------------------------------------------------------- | ------------------- | ------------------------------------------------- |
-| Free user submits 31-minute audio                              | Usage cap bypass    | 402 before Inngest job is queued                  |
-| Concurrent uploads to exceed minute cap in race                | Race condition      | Atomic DB check prevents double-spend             |
-| Modify `intensity` field after note is ready to trigger re-run | Parameter tampering | Re-run requires explicit user action + auth check |
-
----
-
-## 10. GitHub Actions CI Pipeline
-
-File: `.github/workflows/ci.yml`
-
-```yaml
-name: CI
-
-on:
-  push:
-    branches: [main, "feat/**", "fix/**", "security/**"]
-  pull_request:
-    branches: [main]
-
-jobs:
-  quality:
-    name: Lint + Typecheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm format:check
-      - run: pnpm typecheck
-
-  unit-tests:
-    name: Unit + Integration Tests
-    runs-on: ubuntu-latest
-    needs: quality
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:coverage
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-
-  security-tests:
-    name: Security Test Suite
-    runs-on: ubuntu-latest
-    needs: quality
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:security
-
-  dependency-audit:
-    name: Dependency Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - run: pnpm audit --audit-level=high
-
-  e2e:
-    name: E2E Tests (Playwright)
-    runs-on: ubuntu-latest
-    needs: [unit-tests, security-tests]
-    services:
-      supabase:
-        image: supabase/postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-    env:
-      NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.CI_SUPABASE_ANON_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm build
-      - run: pnpm test:e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: playwright-report/
-
-  all-green:
-    name: All checks passed
-    runs-on: ubuntu-latest
-    needs: [quality, unit-tests, security-tests, dependency-audit, e2e]
-    steps:
-      - run: echo "All CI checks passed"
-```
-
----
-
-## 11. Implementation Progress
-
-### Phase 1 — MVP
-
-| Session | Deliverable                                                                  | Status   | Notes                                              |
-| ------- | ---------------------------------------------------------------------------- | -------- | -------------------------------------------------- |
-| 1       | Project scaffold (Next.js 16, folder structure, Supabase local, migrations)  | **Done** | Next.js 16.2.4, React 19, pnpm                     |
-| 1       | `.env.example`, `.nvmrc`, ESLint, Prettier, Husky                            | **Done** | ESLint 9 flat config + security + sonarjs plugins  |
-| 1       | `src/config/app.ts` (APP_CONFIG)                                             | **Done** | Name = "QuillCast" — single file to rename         |
-| 1       | Vitest 100% coverage config + Playwright config                              | **Done** | 100 tests passing; security project configured     |
-| 1       | GitHub Actions CI pipeline                                                   | **Done** | quality → unit + security → e2e → all-green        |
-| 1       | STT adapters (openai, sarvam stub, elevenlabs stub)                          | **Done** | Feature-flagged; ENABLE_SARVAM/ENABLE_ELEVENLABS   |
-| 1       | LLM routing + all 5 prompts                                                  | **Done** | `src/lib/llm/prompts/` — named TS exports          |
-| 1       | Security lib (webhook, ratelimit, sanitize)                                  | **Done** | HMAC verify, IP rate limiter, UUID/MIME validation |
-| 1       | Usage limits + Zod enforcement                                               | **Done** | Tier caps, note duration limits, schema validation |
-| 1       | Supabase schema migration                                                    | **Done** | 4 tables + RLS + indexes + auto-profile trigger    |
-| 1       | Middleware (auth guard + rate limiting)                                      | **Done** | Defence-in-depth; never trusts middleware alone    |
-| 1       | Security attack simulation tests (100 tests)                                 | **Done** | 26 attack scenarios; 1 real bug found and fixed    |
-| 2       | Structured logging (pino + PII redaction + rotating file)                    | **Done** | 34 fields redacted; dev pretty-print; prod file    |
-| 2       | Audit log system (30+ event types, DB persistence, user masking)             | **Done** | `audit_logs` table; never crashes on DB failure    |
-| 2       | Admin dashboard (live users, sessions IST, LLM cost, audit feed)             | **Done** | Server component; double-verified admin access     |
-| 2       | Admin API routes (stats + paginated users, Zod-validated)                    | **Done** | `/api/admin/stats`, `/api/admin/users`             |
-| 2       | Supabase migration: audit_logs + user_sessions + SQL functions               | **Done** | `get_live_users()`, `get_user_token_usage()`       |
-| 2       | Standardised API error responses + Zod error formatter                       | **Done** | `API_ERRORS` constants; `handleRouteError()`       |
-| 2       | Next.js error boundaries (error.tsx + global-error.tsx)                      | **Done** | Digest ID shown; root-level catch all              |
-| 2       | Tests: STT routing, LLM routing, logger PII, audit, API errors               | **Done** | 181 tests; 100% coverage (all 4 metrics)           |
-| 2       | Security tests: admin access control (auth, privilege escalation, injection) | **Done** | 10 attack scenarios; all blocked                   |
-| 2       | Landing page (English) + `/hi` (Hindi)                                       | Pending  |                                                    |
-| 2       | Google OAuth + magic link auth                                               | Pending  |                                                    |
-| 2       | `/notes` placeholder + onboarding language selector                          | Pending  |                                                    |
-| 3       | Recorder UI (MediaRecorder, waveform, chunked upload)                        | Pending  |                                                    |
-| 3       | Verbatim / Light / Full intensity selector                                   | Pending  |                                                    |
-| 3       | Audio file drag-drop upload + ffmpeg-wasm split                              | Pending  |                                                    |
-| 4       | Inngest pipeline (transcribe → cleanup)                                      | Pending  |                                                    |
-| 4       | Supabase Realtime status updates                                             | Pending  |                                                    |
-| 5       | Notes list + single note side-by-side view                                   | Pending  |                                                    |
-| 5       | Razorpay + Lemon Squeezy webhooks                                            | Pending  |                                                    |
-| 5       | PostHog + Sentry wiring                                                      | Pending  |                                                    |
-| 5       | Cost-tracking cron + daily spend cap                                         | Pending  |                                                    |
-
-### Phase 2 — Competitive parity (Weeks 5–10)
-
-_(detailed breakdown added when Phase 1 ships)_
+Key items: iOS/Android via Expo, folders/tags, full-text search, style library, "Write Like Me", native Notion/Obsidian integrations, public API.
 
 ### Phase 3 — Differentiation (Weeks 11–24)
 
-_(detailed breakdown added when Phase 2 ships)_
+_(Detailed breakdown added when Phase 2 ships)_
+
+Key items: WhatsApp bot, RAG "ask your notes", Mac dictation app, on-device Whisper, team plan, Chrome extension.
 
 ---
 
-## 12. How to Start the Application
+## 13. Local Development Setup
 
-### Prerequisites (one-time)
+### Quick start (use `manage.sh`)
 
 ```bash
-# 1. Install Node 22
-nvm install 22 && nvm use 22      # or: fnm use 22
+./manage.sh install   # checks prereqs, pnpm install, creates .env.local
+./manage.sh start     # shows config (redacted) then starts dev server
+./manage.sh stop      # kills the dev server
+./manage.sh restart   # stop + config + start
+./manage.sh config    # show current config (all secrets redacted)
+./manage.sh status    # is the server running?
+./manage.sh logs      # tail dev logs
+./manage.sh admin     # show admin console URLs + SQL snippet
+./manage.sh help      # list all commands
+```
 
-# 2. Install pnpm (if not already)
-npm i -g pnpm
+### Manual setup
 
-# 3. Install Supabase CLI (one-time)
-# On Linux — binary is already installed at /usr/local/bin/supabase
-# On Mac: brew install supabase/tap/supabase
-
-# 4. Install dependencies
+```bash
 pnpm install
-
-# 5. Copy env file and fill in keys
-cp .env.example .env.local
-# Edit .env.local — at minimum fill: ANTHROPIC_API_KEY
-# Supabase keys will be printed by `supabase start` in step 6
+cp .env.example .env.local        # fill in keys
+supabase start                    # Docker required
+supabase db push                  # apply migrations
+pnpm dev                          # http://localhost:3000
 ```
 
-### Start local Supabase (Docker required — runs once per machine restart)
+### Supabase local URLs
 
-```bash
-supabase start
-# Prints local URLs and keys — copy them into .env.local:
-#   NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
-#   NEXT_PUBLIC_SUPABASE_ANON_KEY=<printed anon key>
-#   SUPABASE_SERVICE_ROLE_KEY=<printed service role key>
-
-# Apply the schema migration
-supabase db push
-
-# Optional: open Supabase Studio (visual DB browser)
-# Visit http://localhost:54323
-```
-
-### Start the Next.js dev server
-
-```bash
-pnpm dev
-# App is live at http://localhost:3000
-```
-
-### Run tests
-
-```bash
-pnpm test              # all unit + integration + security tests
-pnpm test:coverage     # same + coverage report (must hit 100%)
-pnpm test:security     # security attack simulations only
-pnpm test:e2e          # Playwright E2E (requires `pnpm dev` or `pnpm build && pnpm start`)
-```
-
-### Stop local Supabase
-
-```bash
-supabase stop          # stops Docker containers but keeps data
-supabase stop --backup # stops and backs up the local DB
-```
+| Service  | URL                                                     |
+| -------- | ------------------------------------------------------- |
+| API      | http://localhost:54321                                  |
+| Studio   | http://localhost:54323                                  |
+| Postgres | postgresql://postgres:postgres@localhost:54322/postgres |
+| Storage  | http://localhost:54321/storage/v1                       |
 
 ---
 
-## 13. Security Checklist — Per Feature
+## 14. Coding Standards
 
-Before marking any feature as complete, verify:
+### TypeScript
 
-- [ ] All inputs validated with Zod at the API boundary
-- [ ] Auth checked in both middleware AND the route handler (defence in depth)
-- [ ] RLS policy exists for any new Supabase table
-- [ ] No API keys or secrets in client-side code
-- [ ] Webhook signature verified before processing
+- `strict: true` — no exceptions, no `any`
+- `unknown` + type guards at all external boundaries
+- Zod for all API inputs, webhook payloads, env validation
+- All route handlers must have explicit `Promise<Response>` return types
+
+### React / Next.js (read `node_modules/next/dist/docs/` before writing Next.js code)
+
+- Server components by default; `"use client"` only for state/refs/effects/browser APIs
+- DB access only in server components, server actions, or route handlers
+- `getUser()` for auth-sensitive operations (not `getSession()` — cached, stale)
+
+### Security (mandatory for every new feature)
+
+- [ ] Zod validation at every API boundary
+- [ ] Auth checked in middleware AND route handler (defence-in-depth)
+- [ ] RLS policy for every new Supabase table
+- [ ] Webhook signature verified (HMAC timing-safe) before processing
 - [ ] Rate limiting applied to the route
-- [ ] No PII in Sentry/PostHog payloads
-- [ ] `pnpm audit` shows no high/critical vulnerabilities
-- [ ] Corresponding security test written and passing
-- [ ] `pnpm lint && pnpm typecheck` passes
+- [ ] No API keys in client-side code
+- [ ] No PII in Sentry/PostHog/logs (`REDACTED_PATHS` in `logger/index.ts`)
+- [ ] `pnpm audit --audit-level=high` passing
+- [ ] Security test written for the new attack surface
+- [ ] `pnpm lint && pnpm typecheck` clean
+
+### Commits
+
+- Format: `type(scope): short description` (Conventional Commits)
+- Types: `feat` `fix` `chore` `test` `docs` `security` `refactor`
+- Commit after every meaningful unit — never batch unrelated changes
+- Always push immediately: `git push -u origin claude/plan-mvp-naming-Y7eZq`
+
+---
+
+## 15. How to Start the Application (full detail)
+
+```bash
+# ── Prerequisites (one-time) ───────────────────────────────────────
+nvm install 22 && nvm use 22       # Node 22 LTS
+npm i -g pnpm                      # pnpm 10
+# Docker Desktop must be running for Supabase local
+
+# ── Install and configure ─────────────────────────────────────────
+./manage.sh install                # or: pnpm install && cp .env.example .env.local
+
+# ── Supabase (Docker required) ────────────────────────────────────
+supabase start                     # prints keys → copy to .env.local
+supabase db push                   # apply migrations
+
+# ── Run ──────────────────────────────────────────────────────────
+./manage.sh start                  # or: pnpm dev
+
+# ── Test ─────────────────────────────────────────────────────────
+pnpm test              # unit + security
+pnpm test:coverage     # must stay at 100%
+pnpm test:security     # attack simulations only
+bash tests/shell/manage.test.sh    # shell unit tests
+pnpm test:e2e          # Playwright (requires server running)
+
+# ── Stop ─────────────────────────────────────────────────────────
+./manage.sh stop
+supabase stop          # keeps data
+```

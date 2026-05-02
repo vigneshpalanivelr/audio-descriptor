@@ -140,8 +140,8 @@ describe("ATTACK: SSRF via Audio URL", () => {
 
   it("blocks AWS IMDS endpoint (cloud metadata SSRF)", () => {
     expect(
-      validateAudioUrl("http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
-    ).toBe(false) // eslint-disable-line sonarjs/no-clear-text-protocols
+      validateAudioUrl("http://169.254.169.254/latest/meta-data/iam/security-credentials/"), // eslint-disable-line sonarjs/no-clear-text-protocols
+    ).toBe(false)
   })
 
   it("blocks GCP metadata endpoint", () => {
