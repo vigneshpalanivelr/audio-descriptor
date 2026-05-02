@@ -1,5 +1,7 @@
 module.exports = {
   hooks: {
-    readPackage(pkg) { return pkg }
-  }
+    readPackage(pkg) {
+      return pkg
+    },
+  },
 }
