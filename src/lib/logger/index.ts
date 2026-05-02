@@ -36,11 +36,9 @@ const REDACTED_PATHS = [
 const isDev = process.env["NODE_ENV"] !== "production"
 const logDir = path.resolve(process.cwd(), "logs")
 
-function buildTransports() {
-  /* c8 ignore start */
+function buildTransports(): pino.DestinationStream {
   if (isDev) {
-    // Dev: pretty-print to stdout only — only called in production, so can't be unit-tested
-    return {
+    return pino.transport({
       target: "pino-pretty",
       options: {
         colorize: true,
@@ -48,11 +46,10 @@ function buildTransports() {
         ignore: "pid,hostname",
         messageFormat: "[{module}] {msg}",
       },
-    }
+    })
   }
-  /* c8 ignore stop */
 
-  // Production: JSON to stdout + rotating file
+  /* c8 ignore start */
   const fileStream = createStream({
     filename: "quillcast.log",
     path: logDir,
@@ -65,6 +62,7 @@ function buildTransports() {
     { stream: process.stdout, level: "info" },
     { stream: fileStream, level: "debug" },
   ])
+  /* c8 ignore stop */
 }
 
 const logger = pino(
@@ -87,7 +85,7 @@ const logger = pino(
       /* c8 ignore next */ env: process.env["NODE_ENV"] ?? "development",
     },
   },
-  isDev ? undefined : (buildTransports() as pino.DestinationStream),
+  buildTransports(),
 )
 
 // Child loggers per module — keeps logs filterable by module name

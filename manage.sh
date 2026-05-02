@@ -146,7 +146,7 @@ load_env() {
   if [[ -f ".env.local" ]]; then
     set -a
     # shellcheck disable=SC1091
-    source <(grep -E '^[A-Z_][A-Z0-9_]*=.' .env.local | grep -v '^#') 2>/dev/null || true
+    source .env.local 2>/dev/null || true
     set +a
   fi
 }
@@ -185,6 +185,11 @@ show_config() {
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_URL"     "${NEXT_PUBLIC_SUPABASE_URL:-(not set)}"
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY" "$(redact "${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}")"
   printf "    ${DIM}%-36s${RST} %b\n" "SUPABASE_SERVICE_ROLE_KEY"    "$(redact "${SUPABASE_SERVICE_ROLE_KEY:-}")"
+
+  echo ""
+  echo "  ${BD}OAuth${RST}"
+  printf "    ${DIM}%-36s${RST} %b\n" "GOOGLE_CLIENT_ID"     "$(redact "${GOOGLE_CLIENT_ID:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "GOOGLE_CLIENT_SECRET" "$(redact "${GOOGLE_CLIENT_SECRET:-}")"
 
   echo ""
   echo "  ${BD}LLM / STT APIs${RST}"
