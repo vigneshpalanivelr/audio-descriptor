@@ -22,10 +22,15 @@ export default defineConfig({
       name: "Mobile Chrome",
       use: { ...devices["Pixel 7"] },
     },
-    {
-      name: "Mobile Safari",
-      use: { ...devices["iPhone 15"] },
-    },
+    // webkit (Mobile Safari) requires a separate browser install; enabled in full local suite only
+    ...(process.env.CI
+      ? []
+      : [
+          {
+            name: "Mobile Safari",
+            use: { ...devices["iPhone 15"] },
+          },
+        ]),
   ],
   // CI: serve pre-built output (pnpm build runs before E2E in the CI workflow)
   // Local: start dev server and reuse if already running
