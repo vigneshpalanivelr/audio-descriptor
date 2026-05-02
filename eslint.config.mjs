@@ -30,9 +30,10 @@ const eslintConfig = defineConfig([
       "sonarjs/cognitive-complexity": ["error", 25],
       "security/detect-object-injection": "off",
       "security/detect-non-literal-fs-filename": "off",
-      // Test files use fixed dummy strings — not real secrets
+      // Test files use fixed dummy strings — not real secrets or IPs
       "sonarjs/hardcoded-secret-signatures": "off",
       "sonarjs/no-hardcoded-secrets": "off",
+      "sonarjs/no-hardcoded-ip": "off",
     },
   },
   globalIgnores([

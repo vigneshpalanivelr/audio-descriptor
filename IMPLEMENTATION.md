@@ -539,32 +539,41 @@ jobs:
 
 ### Phase 1 — MVP
 
-| Session | Deliverable                                                                 | Status   | Notes                                              |
-| ------- | --------------------------------------------------------------------------- | -------- | -------------------------------------------------- |
-| 1       | Project scaffold (Next.js 16, folder structure, Supabase local, migrations) | **Done** | Next.js 16.2.4, React 19, pnpm                     |
-| 1       | `.env.example`, `.nvmrc`, ESLint, Prettier, Husky                           | **Done** | ESLint 9 flat config + security + sonarjs plugins  |
-| 1       | `src/config/app.ts` (APP_CONFIG)                                            | **Done** | Name = "QuillCast" — single file to rename         |
-| 1       | Vitest 100% coverage config + Playwright config                             | **Done** | 100 tests passing; security project configured     |
-| 1       | GitHub Actions CI pipeline                                                  | **Done** | quality → unit + security → e2e → all-green        |
-| 1       | STT adapters (openai, sarvam stub, elevenlabs stub)                         | **Done** | Feature-flagged; ENABLE_SARVAM/ENABLE_ELEVENLABS   |
-| 1       | LLM routing + all 5 prompts                                                 | **Done** | `src/lib/llm/prompts/` — named TS exports          |
-| 1       | Security lib (webhook, ratelimit, sanitize)                                 | **Done** | HMAC verify, IP rate limiter, UUID/MIME validation |
-| 1       | Usage limits + Zod enforcement                                              | **Done** | Tier caps, note duration limits, schema validation |
-| 1       | Supabase schema migration                                                   | **Done** | 4 tables + RLS + indexes + auto-profile trigger    |
-| 1       | Middleware (auth guard + rate limiting)                                     | **Done** | Defence-in-depth; never trusts middleware alone    |
-| 1       | Security attack simulation tests (100 tests)                                | **Done** | 26 attack scenarios; 1 real bug found and fixed    |
-| 2       | Landing page (English) + `/hi` (Hindi)                                      | Pending  |                                                    |
-| 2       | Google OAuth + magic link auth                                              | Pending  |                                                    |
-| 2       | `/notes` placeholder + onboarding language selector                         | Pending  |                                                    |
-| 3       | Recorder UI (MediaRecorder, waveform, chunked upload)                       | Pending  |                                                    |
-| 3       | Verbatim / Light / Full intensity selector                                  | Pending  |                                                    |
-| 3       | Audio file drag-drop upload + ffmpeg-wasm split                             | Pending  |                                                    |
-| 4       | Inngest pipeline (transcribe → cleanup)                                     | Pending  |                                                    |
-| 4       | Supabase Realtime status updates                                            | Pending  |                                                    |
-| 5       | Notes list + single note side-by-side view                                  | Pending  |                                                    |
-| 5       | Razorpay + Lemon Squeezy webhooks                                           | Pending  |                                                    |
-| 5       | PostHog + Sentry wiring                                                     | Pending  |                                                    |
-| 5       | Cost-tracking cron + daily spend cap                                        | Pending  |                                                    |
+| Session | Deliverable                                                                  | Status   | Notes                                              |
+| ------- | ---------------------------------------------------------------------------- | -------- | -------------------------------------------------- |
+| 1       | Project scaffold (Next.js 16, folder structure, Supabase local, migrations)  | **Done** | Next.js 16.2.4, React 19, pnpm                     |
+| 1       | `.env.example`, `.nvmrc`, ESLint, Prettier, Husky                            | **Done** | ESLint 9 flat config + security + sonarjs plugins  |
+| 1       | `src/config/app.ts` (APP_CONFIG)                                             | **Done** | Name = "QuillCast" — single file to rename         |
+| 1       | Vitest 100% coverage config + Playwright config                              | **Done** | 100 tests passing; security project configured     |
+| 1       | GitHub Actions CI pipeline                                                   | **Done** | quality → unit + security → e2e → all-green        |
+| 1       | STT adapters (openai, sarvam stub, elevenlabs stub)                          | **Done** | Feature-flagged; ENABLE_SARVAM/ENABLE_ELEVENLABS   |
+| 1       | LLM routing + all 5 prompts                                                  | **Done** | `src/lib/llm/prompts/` — named TS exports          |
+| 1       | Security lib (webhook, ratelimit, sanitize)                                  | **Done** | HMAC verify, IP rate limiter, UUID/MIME validation |
+| 1       | Usage limits + Zod enforcement                                               | **Done** | Tier caps, note duration limits, schema validation |
+| 1       | Supabase schema migration                                                    | **Done** | 4 tables + RLS + indexes + auto-profile trigger    |
+| 1       | Middleware (auth guard + rate limiting)                                      | **Done** | Defence-in-depth; never trusts middleware alone    |
+| 1       | Security attack simulation tests (100 tests)                                 | **Done** | 26 attack scenarios; 1 real bug found and fixed    |
+| 2       | Structured logging (pino + PII redaction + rotating file)                    | **Done** | 34 fields redacted; dev pretty-print; prod file    |
+| 2       | Audit log system (30+ event types, DB persistence, user masking)             | **Done** | `audit_logs` table; never crashes on DB failure    |
+| 2       | Admin dashboard (live users, sessions IST, LLM cost, audit feed)             | **Done** | Server component; double-verified admin access     |
+| 2       | Admin API routes (stats + paginated users, Zod-validated)                    | **Done** | `/api/admin/stats`, `/api/admin/users`             |
+| 2       | Supabase migration: audit_logs + user_sessions + SQL functions               | **Done** | `get_live_users()`, `get_user_token_usage()`       |
+| 2       | Standardised API error responses + Zod error formatter                       | **Done** | `API_ERRORS` constants; `handleRouteError()`       |
+| 2       | Next.js error boundaries (error.tsx + global-error.tsx)                      | **Done** | Digest ID shown; root-level catch all              |
+| 2       | Tests: STT routing, LLM routing, logger PII, audit, API errors               | **Done** | 181 tests; 100% coverage (all 4 metrics)           |
+| 2       | Security tests: admin access control (auth, privilege escalation, injection) | **Done** | 10 attack scenarios; all blocked                   |
+| 2       | Landing page (English) + `/hi` (Hindi)                                       | Pending  |                                                    |
+| 2       | Google OAuth + magic link auth                                               | Pending  |                                                    |
+| 2       | `/notes` placeholder + onboarding language selector                          | Pending  |                                                    |
+| 3       | Recorder UI (MediaRecorder, waveform, chunked upload)                        | Pending  |                                                    |
+| 3       | Verbatim / Light / Full intensity selector                                   | Pending  |                                                    |
+| 3       | Audio file drag-drop upload + ffmpeg-wasm split                              | Pending  |                                                    |
+| 4       | Inngest pipeline (transcribe → cleanup)                                      | Pending  |                                                    |
+| 4       | Supabase Realtime status updates                                             | Pending  |                                                    |
+| 5       | Notes list + single note side-by-side view                                   | Pending  |                                                    |
+| 5       | Razorpay + Lemon Squeezy webhooks                                            | Pending  |                                                    |
+| 5       | PostHog + Sentry wiring                                                      | Pending  |                                                    |
+| 5       | Cost-tracking cron + daily spend cap                                         | Pending  |                                                    |
 
 ### Phase 2 — Competitive parity (Weeks 5–10)
 
