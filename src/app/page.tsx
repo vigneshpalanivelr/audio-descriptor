@@ -1,65 +1,197 @@
-import Image from "next/image"
+import Link from "next/link"
+import { APP_CONFIG } from "@/config/app"
 
-export default function Home() {
+const TIERS = [
+  {
+    name: "Free",
+    priceInr: "₹0",
+    priceUsd: "$0",
+    minutes: "30 min / mo",
+    notes: "10 notes / mo",
+    cta: "Get started free",
+    highlight: false,
+  },
+  {
+    name: "Starter",
+    priceInr: "₹499",
+    priceUsd: "$7",
+    minutes: "5 hours / mo",
+    notes: "Unlimited notes",
+    cta: "Start with Starter",
+    highlight: false,
+  },
+  {
+    name: "Pro",
+    priceInr: "₹999",
+    priceUsd: "$12",
+    minutes: "30 hours / mo",
+    notes: "Unlimited notes",
+    cta: "Go Pro",
+    highlight: true,
+  },
+  {
+    name: "Pro + Local",
+    priceInr: "₹1,999",
+    priceUsd: "$24",
+    minutes: "Unlimited",
+    notes: "Unlimited notes",
+    cta: "Go unlimited",
+    highlight: false,
+  },
+] as const
+
+const FAQS = [
+  {
+    q: "Which languages are supported?",
+    a: "Hindi, Tamil, English, Hinglish, and most other languages supported by OpenAI Whisper — over 50 languages in total.",
+  },
+  {
+    q: "How is QuillCast different from AudioPen?",
+    a: "QuillCast is built for Indian audiences first — native Rupee pricing, Razorpay checkout, Sarvam Saaras for Indic languages, and a free tier that actually lets you try it.",
+  },
+  {
+    q: "Can I cancel anytime?",
+    a: "Yes. No lock-in. Cancel from your profile page and you'll keep your plan until the end of the billing period.",
+  },
+  {
+    q: "Is my audio stored?",
+    a: "Audio chunks are stored temporarily while your note is being processed, then deleted. Your transcript and summary are stored in your account.",
+  },
+] as const
+
+export default function LandingPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="flex flex-col min-h-full font-sans">
+      {/* Nav */}
+      <nav className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-background/80 backdrop-blur border-b border-foreground/10">
+        <span className="font-bold text-lg tracking-tight">{APP_CONFIG.name}</span>
+        <Link
+          href="/auth/sign-in"
+          className="rounded-full bg-foreground text-background px-5 py-2 text-sm font-medium hover:opacity-90 transition-opacity"
+        >
+          Sign in
+        </Link>
+      </nav>
+
+      {/* Hero */}
+      <section className="flex flex-col items-center justify-center text-center px-6 py-28 gap-6">
+        <p className="text-sm font-medium tracking-widest uppercase text-foreground/50">
+          Voice → Text, reimagined
+        </p>
+        <h1 className="text-5xl sm:text-6xl font-extrabold leading-tight tracking-tight max-w-2xl">
+          Speak your thoughts.
+          <br />
+          <span className="text-foreground/60">{APP_CONFIG.name} writes them.</span>
+        </h1>
+        <p className="max-w-md text-lg text-foreground/60 leading-relaxed">
+          Record in Hindi, Tamil, English, Hinglish — or any language. Get back a clean, structured
+          note in seconds. The AudioPen upgrade built for India.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3 mt-4">
+          <Link
+            href="/auth/sign-in"
+            className="rounded-full bg-foreground text-background px-7 py-3 text-base font-semibold hover:opacity-90 transition-opacity"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
+            Start for free — no card needed
+          </Link>
           <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            href="#pricing"
+            className="rounded-full border border-foreground/20 px-7 py-3 text-base font-medium hover:border-foreground/40 transition-colors"
           >
-            Documentation
+            See pricing
           </a>
         </div>
-      </main>
+        <p className="text-xs text-foreground/40 mt-2">30 minutes free every month. Forever.</p>
+      </section>
+
+      {/* How it works */}
+      <section className="flex flex-col items-center px-6 py-20 gap-12 bg-foreground/[0.02]">
+        <h2 className="text-3xl font-bold tracking-tight">How it works</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 max-w-3xl w-full text-center">
+          {(
+            [
+              { step: "1", title: "Record", desc: "Tap record, speak naturally in any language." },
+              {
+                step: "2",
+                title: "Transcribe",
+                desc: "AI transcribes your audio with high accuracy.",
+              },
+              {
+                step: "3",
+                title: "Clean up",
+                desc: "Choose Verbatim, Light, or Full cleanup — get a polished note.",
+              },
+            ] as const
+          ).map(({ step, title, desc }) => (
+            <div key={step} className="flex flex-col items-center gap-3">
+              <span className="w-10 h-10 rounded-full bg-foreground text-background flex items-center justify-center font-bold text-lg">
+                {step}
+              </span>
+              <h3 className="font-semibold text-lg">{title}</h3>
+              <p className="text-foreground/60 text-sm leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Pricing */}
+      <section id="pricing" className="flex flex-col items-center px-6 py-20 gap-10">
+        <div className="text-center">
+          <h2 className="text-3xl font-bold tracking-tight">Simple pricing</h2>
+          <p className="mt-2 text-foreground/60">Rupee-first. Cancel anytime.</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 max-w-5xl w-full">
+          {TIERS.map((tier) => (
+            <div
+              key={tier.name}
+              className={`flex flex-col rounded-2xl p-6 gap-4 border ${
+                tier.highlight
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-foreground/15 bg-foreground/[0.03]"
+              }`}
+            >
+              <div>
+                <p className="text-sm font-medium opacity-60">{tier.name}</p>
+                <p className="text-3xl font-extrabold mt-1 leading-none">{tier.priceInr}</p>
+                <p className="text-xs opacity-50 mt-0.5">{tier.priceUsd} / month</p>
+              </div>
+              <ul className="flex flex-col gap-1.5 text-sm opacity-70 flex-1">
+                <li>{tier.minutes}</li>
+                <li>{tier.notes}</li>
+              </ul>
+              <Link
+                href="/auth/sign-in"
+                className={`rounded-full py-2.5 text-sm font-semibold text-center transition-opacity hover:opacity-80 ${
+                  tier.highlight ? "bg-background text-foreground" : "bg-foreground text-background"
+                }`}
+              >
+                {tier.cta}
+              </Link>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section className="flex flex-col items-center px-6 py-20 gap-10 bg-foreground/[0.02]">
+        <h2 className="text-3xl font-bold tracking-tight">FAQ</h2>
+        <div className="flex flex-col gap-6 max-w-2xl w-full">
+          {FAQS.map(({ q, a }) => (
+            <div key={q} className="border-b border-foreground/10 pb-6">
+              <p className="font-semibold mb-2">{q}</p>
+              <p className="text-foreground/60 text-sm leading-relaxed">{a}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="flex flex-col sm:flex-row items-center justify-between px-6 py-6 border-t border-foreground/10 text-xs text-foreground/40 gap-2">
+        <span>
+          © {new Date().getFullYear()} {APP_CONFIG.name}
+        </span>
+        <span>{APP_CONFIG.tagline}</span>
+      </footer>
     </div>
   )
 }
