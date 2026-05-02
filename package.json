@@ -76,5 +76,16 @@
     "*.{json,md,css}": [
       "prettier --write"
     ]
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@sentry/cli",
+      "core-js",
+      "esbuild",
+      "protobufjs",
+      "sharp",
+      "supabase",
+      "unrs-resolver"
+    ]
   }
 }
