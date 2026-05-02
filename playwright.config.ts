@@ -27,9 +27,10 @@ export default defineConfig({
       use: { ...devices["iPhone 15"] },
     },
   ],
-  // Start Next.js dev server before running E2E tests locally
+  // CI: serve pre-built output (pnpm build runs before E2E in the CI workflow)
+  // Local: start dev server and reuse if already running
   webServer: {
-    command: "pnpm dev",
+    command: process.env.CI ? "pnpm start" : "pnpm dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
