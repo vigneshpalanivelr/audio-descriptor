@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { APP_CONFIG } from "@/config/app"
 
 export const metadata = {
@@ -17,14 +18,12 @@ export default function NotesPage() {
           you.
         </p>
       </div>
-      <button
-        disabled
-        className="rounded-full bg-foreground text-background px-7 py-3 text-base font-semibold opacity-40 cursor-not-allowed"
-        title="Coming soon"
+      <Link
+        href="/notes/new"
+        className="rounded-full bg-foreground text-background px-7 py-3 text-base font-semibold hover:opacity-80 transition-opacity"
       >
         + New Note
-      </button>
-      <p className="text-xs text-foreground/30">Recorder coming soon</p>
+      </Link>
     </div>
   )
 }
