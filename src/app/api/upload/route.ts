@@ -12,7 +12,7 @@ import { API_ERRORS, handleRouteError } from "@/lib/api/error"
 import type { UserTier } from "@/types"
 
 const uploadMetaSchema = z.object({
-  durationSec: z.coerce.number().int().positive().max(5400),
+  durationSec: z.coerce.number().int().nonnegative().max(5400),
   language: z
     .string()
     // eslint-disable-next-line security/detect-unsafe-regex -- fixed-length quantifiers only; provably safe
