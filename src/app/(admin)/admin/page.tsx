@@ -48,14 +48,21 @@ interface AdminStats {
 async function fetchAdminStats(): Promise<AdminStats | null> {
   try {
     const base = process.env["NEXT_PUBLIC_APP_URL"] ?? "http://localhost:3000"
+    // Use getUser() (re-validates JWT with Supabase) rather than getSession() (cached)
     const supabase = await createClient()
     const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    if (!session) return null
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return null
+
+    const { cookies } = await import("next/headers")
+    const cookieHeader = (await cookies())
+      .getAll()
+      .map(({ name, value }) => `${name}=${value}`)
+      .join("; ")
 
     const res = await fetch(`${base}/api/admin/stats`, {
-      headers: { Cookie: `sb-access-token=${session.access_token}` },
+      headers: { Cookie: cookieHeader },
       cache: "no-store",
     })
     if (!res.ok) return null
