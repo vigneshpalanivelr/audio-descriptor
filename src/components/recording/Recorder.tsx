@@ -58,6 +58,7 @@ function resolveFileExtension(mimeType: string): string {
 
 interface ControlsProps {
   state: RecorderState
+  canSubmit: boolean
   onStart: () => void
   onPause: () => void
   onResume: () => void
@@ -68,6 +69,7 @@ interface ControlsProps {
 
 function RecorderControls({
   state,
+  canSubmit,
   onStart,
   onPause,
   onResume,
@@ -119,13 +121,18 @@ function RecorderControls({
 
   if (state === "review") {
     return (
-      <div className="flex gap-3 justify-center">
-        <button onClick={onDiscard} className={btnSecondary}>
-          Discard
-        </button>
-        <button onClick={onSubmit} className={btnPrimary}>
-          Transcribe
-        </button>
+      <div className="flex flex-col items-center gap-3">
+        <div className="flex gap-3 justify-center">
+          <button onClick={onDiscard} className={btnSecondary}>
+            Discard
+          </button>
+          <button onClick={onSubmit} disabled={!canSubmit} className={btnPrimary}>
+            Transcribe
+          </button>
+        </div>
+        {!canSubmit && (
+          <p className="text-xs text-foreground/40">Recording too short — try again</p>
+        )}
       </div>
     )
   }
@@ -263,10 +270,13 @@ export function Recorder({ onComplete, onDiscard }: RecorderProps) {
 
   useEffect(() => {
     return () => {
-      stopTimer()
       stream?.getTracks().forEach((t) => t.stop())
     }
   }, [stream])
+
+  useEffect(() => {
+    return () => stopTimer()
+  }, [])
 
   const controlsDisabled = recorderState !== "idle"
 
@@ -320,6 +330,7 @@ export function Recorder({ onComplete, onDiscard }: RecorderProps) {
 
       <RecorderControls
         state={recorderState}
+        canSubmit={duration > 0}
         onStart={() => void startRecording()}
         onPause={pauseRecording}
         onResume={resumeRecording}
