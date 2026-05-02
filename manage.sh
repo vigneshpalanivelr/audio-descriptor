@@ -446,6 +446,31 @@ cmd_test() {
   echo ""
 }
 
+# ─── Detect supabase binary: global CLI first, then pnpm's node_modules/.bin/ ─
+_find_supabase() {
+  if command -v supabase >/dev/null 2>&1; then
+    echo "supabase"
+  elif [[ -x "./node_modules/.bin/supabase" ]]; then
+    echo "./node_modules/.bin/supabase"
+  else
+    echo ""
+  fi
+}
+
+# ─── Set or replace KEY=value in .env.local (handles macOS + Linux sed) ───────
+_update_env_var() {
+  local key="$1" val="$2"
+  if grep -q "^${key}=" .env.local 2>/dev/null; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      sed -i '' "s|^${key}=.*|${key}=${val}|" .env.local
+    else
+      sed -i "s|^${key}=.*|${key}=${val}|" .env.local
+    fi
+  else
+    echo "${key}=${val}" >> .env.local
+  fi
+}
+
 # ─── install ──────────────────────────────────────────────────────────────────
 cmd_install() {
   header "📦  Installing ${APP_NAME}"
@@ -457,6 +482,7 @@ cmd_install() {
   local node_ok=true pnpm_ok=true docker_ok=true
   local node_ver pnpm_ver
 
+  echo "  ${DIM}  \$ node -v${RST}"
   node_ver=$(node -v 2>/dev/null || echo "")
   if [[ -z "$node_ver" ]]; then
     error "Node.js not found. Install Node 22 via nvm: nvm install 22 && nvm use 22"
@@ -465,6 +491,7 @@ cmd_install() {
     printf "  ${DIM}  %-18s${RST} %b\n" "Node.js" "${BG}${node_ver}${RST}"
   fi
 
+  echo "  ${DIM}  \$ pnpm -v${RST}"
   pnpm_ver=$(pnpm -v 2>/dev/null || echo "")
   if [[ -z "$pnpm_ver" ]]; then
     error "pnpm not found. Install: npm i -g pnpm"
@@ -473,6 +500,7 @@ cmd_install() {
     printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
   fi
 
+  echo "  ${DIM}  \$ docker info${RST}"
   if ! docker info >/dev/null 2>&1; then
     warn "Docker not running — Supabase local stack requires Docker Desktop."
     docker_ok=false
@@ -488,43 +516,85 @@ cmd_install() {
 
   # ── 2. pnpm install ─────────────────────────────────────────────────────────
   run_cmd "Install Node dependencies" pnpm install
+  # Note: pnpm may warn "Failed to create bin … supabase" — this is cosmetic.
+  # The supabase postinstall downloads the binary AFTER pnpm tries to link it.
+  # The binary is available in ./node_modules/.bin/supabase once done.
 
   # ── 3. .env.local ───────────────────────────────────────────────────────────
   echo ""
   if [[ ! -f ".env.local" ]]; then
+    echo "  ${DIM}\$ cp .env.example .env.local${RST}"
     cp .env.example .env.local
     success "Created ${BD}.env.local${RST} from .env.example"
-    warn "Edit ${BD}.env.local${RST} and fill in your keys before starting the server."
+    warn "Edit ${BD}.env.local${RST} and fill in your API keys before starting."
   else
     info ".env.local already exists — skipping copy."
   fi
 
-  # ── 4. Supabase (optional) ──────────────────────────────────────────────────
+  # ── 4. Supabase local stack ─────────────────────────────────────────────────
+  local supabase_bin
+  supabase_bin=$(_find_supabase)
+
   echo ""
-  if [[ "$docker_ok" == "true" ]] && command -v supabase >/dev/null 2>&1; then
-    echo "  ${BD}Local Supabase${RST}  ${DIM}(Docker is running)${RST}"
+  if [[ "$docker_ok" == "true" ]] && [[ -n "$supabase_bin" ]]; then
+    echo "  ${BD}Local Supabase stack${RST}"
+
+    # Check if already running — status prints "API URL:" when healthy
+    local status_out=""
+    status_out=$("$supabase_bin" status 2>/dev/null || echo "")
+
+    if echo "$status_out" | grep -q "API URL:"; then
+      info "Supabase local stack is already running — skipping start."
+    else
+      run_cmd "Start Supabase local stack" "$supabase_bin" start
+      status_out=$("$supabase_bin" status 2>/dev/null || echo "")
+    fi
+
+    # Apply all migrations in supabase/migrations/
+    run_cmd "Apply DB migrations" "$supabase_bin" db push
+
+    # Parse keys from status output and auto-write to .env.local
+    local api_url anon_key svc_key
+    api_url=$(echo "$status_out"  | grep -E "API URL:"         | awk '{print $NF}' || echo "")
+    anon_key=$(echo "$status_out" | grep -E "anon key:"        | awk '{print $NF}' || echo "")
+    svc_key=$(echo "$status_out"  | grep -E "service_role key:"| awk '{print $NF}' || echo "")
+
+    if [[ -n "$api_url" && -n "$anon_key" ]]; then
+      echo ""
+      echo "  ${DIM}\$ updating .env.local with Supabase local keys${RST}"
+      _update_env_var "NEXT_PUBLIC_SUPABASE_URL"      "$api_url"
+      _update_env_var "NEXT_PUBLIC_SUPABASE_ANON_KEY" "$anon_key"
+      _update_env_var "SUPABASE_SERVICE_ROLE_KEY"     "$svc_key"
+      success "Updated ${BD}.env.local${RST} with Supabase local keys."
+      echo ""
+      printf "  ${DIM}  %-36s${RST} %s\n"  "NEXT_PUBLIC_SUPABASE_URL"      "$api_url"
+      printf "  ${DIM}  %-36s${RST} %b\n"  "NEXT_PUBLIC_SUPABASE_ANON_KEY" "$(redact "$anon_key")"
+      printf "  ${DIM}  %-36s${RST} %b\n"  "SUPABASE_SERVICE_ROLE_KEY"     "$(redact "$svc_key")"
+    else
+      warn "Could not parse Supabase keys — copy them from the output above into ${BD}.env.local${RST}."
+    fi
+
+  elif [[ "$docker_ok" == "false" ]]; then
+    warn "Docker is not running — start Docker Desktop, then re-run ${BD}./manage.sh install${RST}."
     echo ""
-    echo "  Run these commands to start the local DB and apply the schema:"
-    echo ""
-    echo "    ${DIM}supabase start          ${RST}  # starts Postgres + Auth + Storage"
-    echo "    ${DIM}supabase db push        ${RST}  # applies migrations from supabase/migrations/"
-    echo ""
-    echo "  After ${BD}supabase start${RST} prints the local keys, paste them into ${BD}.env.local${RST}:"
-    echo ""
-    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321${RST}"
-    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_ANON_KEY=<printed anon key>${RST}"
-    echo "    ${DIM}SUPABASE_SERVICE_ROLE_KEY=<printed service role key>${RST}"
+    info "Alternatively, use a remote Supabase project:"
+    echo "  ${DIM}  1. Create a project at https://supabase.com${RST}"
+    echo "  ${DIM}  2. Paste its API URL + keys into .env.local${RST}"
+    echo "  ${DIM}  3. Run: supabase link --project-ref <ref> && supabase db push${RST}"
   else
-    warn "supabase CLI not found or Docker not running."
+    warn "supabase CLI not found in PATH or ./node_modules/.bin/."
     echo "  ${DIM}  Install: brew install supabase/tap/supabase  (Mac)${RST}"
     echo "  ${DIM}         or: https://supabase.com/docs/guides/cli${RST}"
+    echo "  ${DIM}  Then re-run: ./manage.sh install${RST}"
   fi
 
   # ── 5. Summary ──────────────────────────────────────────────────────────────
   echo ""
   echo "  ${BD}Next steps${RST}"
-  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ANTHROPIC_API_KEY)"
-  echo "  ${DIM}  2.${RST}  ${BD}supabase start && supabase db push${RST}  (local DB)"
+  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ${BD}ANTHROPIC_API_KEY${RST})"
+  if [[ "$docker_ok" == "false" || -z "$supabase_bin" ]]; then
+    echo "  ${DIM}  2.${RST}  Start Docker → re-run ${BD}./manage.sh install${RST}  (starts DB + applies schema)"
+  fi
   echo "  ${DIM}  3.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
   echo "  ${DIM}  4.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
   echo ""
