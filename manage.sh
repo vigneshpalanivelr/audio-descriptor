@@ -446,10 +446,96 @@ cmd_test() {
   echo ""
 }
 
-# ─── help ─────────────────────────────────────────────────────────────────────
+# ─── install ──────────────────────────────────────────────────────────────────
+cmd_install() {
+  header "📦  Installing ${APP_NAME}"
+
+  # ── 1. Prerequisites check ──────────────────────────────────────────────────
+  echo ""
+  echo "  ${BD}Checking prerequisites${RST}"
+
+  local node_ok=true pnpm_ok=true docker_ok=true
+  local node_ver pnpm_ver
+
+  node_ver=$(node -v 2>/dev/null || echo "")
+  if [[ -z "$node_ver" ]]; then
+    error "Node.js not found. Install Node 22 via nvm: nvm install 22 && nvm use 22"
+    node_ok=false
+  else
+    printf "  ${DIM}  %-18s${RST} %b\n" "Node.js" "${BG}${node_ver}${RST}"
+  fi
+
+  pnpm_ver=$(pnpm -v 2>/dev/null || echo "")
+  if [[ -z "$pnpm_ver" ]]; then
+    error "pnpm not found. Install: npm i -g pnpm"
+    pnpm_ok=false
+  else
+    printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    warn "Docker not running — Supabase local stack requires Docker Desktop."
+    docker_ok=false
+  else
+    printf "  ${DIM}  %-18s${RST} %b\n" "Docker" "${BG}running${RST}"
+  fi
+
+  if [[ "$node_ok" == "false" || "$pnpm_ok" == "false" ]]; then
+    echo ""
+    error "Install missing prerequisites above, then re-run ./manage.sh install"
+    exit 1
+  fi
+
+  # ── 2. pnpm install ─────────────────────────────────────────────────────────
+  run_cmd "Install Node dependencies" pnpm install
+
+  # ── 3. .env.local ───────────────────────────────────────────────────────────
+  echo ""
+  if [[ ! -f ".env.local" ]]; then
+    cp .env.example .env.local
+    success "Created ${BD}.env.local${RST} from .env.example"
+    warn "Edit ${BD}.env.local${RST} and fill in your keys before starting the server."
+  else
+    info ".env.local already exists — skipping copy."
+  fi
+
+  # ── 4. Supabase (optional) ──────────────────────────────────────────────────
+  echo ""
+  if [[ "$docker_ok" == "true" ]] && command -v supabase >/dev/null 2>&1; then
+    echo "  ${BD}Local Supabase${RST}  ${DIM}(Docker is running)${RST}"
+    echo ""
+    echo "  Run these commands to start the local DB and apply the schema:"
+    echo ""
+    echo "    ${DIM}supabase start          ${RST}  # starts Postgres + Auth + Storage"
+    echo "    ${DIM}supabase db push        ${RST}  # applies migrations from supabase/migrations/"
+    echo ""
+    echo "  After ${BD}supabase start${RST} prints the local keys, paste them into ${BD}.env.local${RST}:"
+    echo ""
+    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321${RST}"
+    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_ANON_KEY=<printed anon key>${RST}"
+    echo "    ${DIM}SUPABASE_SERVICE_ROLE_KEY=<printed service role key>${RST}"
+  else
+    warn "supabase CLI not found or Docker not running."
+    echo "  ${DIM}  Install: brew install supabase/tap/supabase  (Mac)${RST}"
+    echo "  ${DIM}         or: https://supabase.com/docs/guides/cli${RST}"
+  fi
+
+  # ── 5. Summary ──────────────────────────────────────────────────────────────
+  echo ""
+  echo "  ${BD}Next steps${RST}"
+  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ANTHROPIC_API_KEY)"
+  echo "  ${DIM}  2.${RST}  ${BD}supabase start && supabase db push${RST}  (local DB)"
+  echo "  ${DIM}  3.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
+  echo "  ${DIM}  4.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
+  echo ""
+}
+
 cmd_help() {
   header "🎙  ${APP_NAME} — manage.sh"
   cat <<EOF
+
+  ${BD}Setup${RST}
+  ${DIM}  install            ${RST}  Check prereqs, pnpm install, create .env.local
 
   ${BD}Server${RST}
   ${DIM}  start [dev|prod]   ${RST}  Start server ${DIM}(default: dev)${RST}
@@ -483,6 +569,7 @@ EOF
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   COMMAND="${1:-help}"
   case "$COMMAND" in
+    install) cmd_install ;;
     start)   cmd_start   "${2:-dev}" ;;
     stop)    cmd_stop ;;
     restart) cmd_restart "${2:-dev}" ;;
