@@ -70,16 +70,14 @@ run_cmd() {
   echo "  ${DIM}\$${RST} ${BC}$*${RST}"
   divider
 
-  # Capture the real exit code through the pipe via a temp fd
-  local tmpfile
+  # Capture the real exit code without modifying global shell options.
+  # "cmd || _ec=$?" prevents set -e from aborting on failure while still
+  # capturing the non-zero code; the inner redirect writes only the code
+  # to the tempfile while the rest of the output flows to the pipe.
+  local tmpfile _ec=0
   tmpfile=$(mktemp)
-  exec 3>"$tmpfile"
+  { "$@" || _ec=$?; printf "%d" "$_ec" > "$tmpfile"; } 2>&1 | colorize_output
 
-  set +e
-  { "$@" 2>&1; printf "%d" $? >&3; } | colorize_output
-  set -e
-
-  exec 3>&-
   local code
   code=$(cat "$tmpfile")
   rm -f "$tmpfile"
