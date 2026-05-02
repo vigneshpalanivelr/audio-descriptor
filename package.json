@@ -17,6 +17,7 @@
     "test:security": "vitest run --project security",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:shell": "bash tests/shell/manage.test.sh",
     "prepare": "husky"
   },
   "dependencies": {
