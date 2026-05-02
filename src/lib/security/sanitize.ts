@@ -29,8 +29,9 @@ export const ALLOWED_AUDIO_MIME_TYPES = new Set([
 ])
 
 export function isAllowedAudioMimeType(mimeType: string): boolean {
-  const normalized = mimeType.toLowerCase().split(";")[0]?.trim() ?? ""
-  return ALLOWED_AUDIO_MIME_TYPES.has(normalized) || ALLOWED_AUDIO_MIME_TYPES.has(mimeType)
+  // String.split always returns ≥1 element — non-null assertion is safe
+  const normalized = mimeType.toLowerCase().split(";")[0]!.trim()
+  return ALLOWED_AUDIO_MIME_TYPES.has(normalized)
 }
 
 // Strip any non-printable characters from user-supplied text

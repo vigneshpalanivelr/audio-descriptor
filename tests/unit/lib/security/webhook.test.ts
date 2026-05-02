@@ -33,6 +33,11 @@ describe("verifyRazorpaySignature", () => {
   it("returns false for empty signature string", () => {
     expect(verifyRazorpaySignature(BODY, "", SECRET)).toBe(false)
   })
+
+  it("returns false when signature has wrong byte length (timingSafeEqual would throw)", () => {
+    // A 10-char hex string has different byte length than the 64-char HMAC-SHA256 output
+    expect(verifyRazorpaySignature(BODY, "abc123", SECRET)).toBe(false)
+  })
 })
 
 describe("verifyLemonSqueezySignature", () => {
