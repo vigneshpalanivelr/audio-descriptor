@@ -499,34 +499,55 @@ cmd_install() {
     info ".env.local already exists — skipping copy."
   fi
 
-  # ── 4. Supabase (optional) ──────────────────────────────────────────────────
+  # ── 4. Supabase ─────────────────────────────────────────────────────────────
   echo ""
   if [[ "$docker_ok" == "true" ]] && command -v supabase >/dev/null 2>&1; then
-    echo "  ${BD}Local Supabase${RST}  ${DIM}(Docker is running)${RST}"
+    echo "  ${BD}Local Supabase${RST}"
+    echo "  ${DIM}  supabase start  — launches Postgres, Auth, Storage, and Studio containers${RST}"
+    echo "  ${DIM}  supabase db push — applies all migrations from supabase/migrations/ to the local DB${RST}"
     echo ""
-    echo "  Run these commands to start the local DB and apply the schema:"
+    # Start the local Supabase stack (idempotent: safe to re-run if already running)
+    run_cmd "Start local Supabase stack" supabase start
+    # Apply (or re-apply) all SQL migrations in supabase/migrations/
+    run_cmd "Apply database migrations" supabase db push
     echo ""
-    echo "    ${DIM}supabase start          ${RST}  # starts Postgres + Auth + Storage"
-    echo "    ${DIM}supabase db push        ${RST}  # applies migrations from supabase/migrations/"
+    info "Supabase is running. Copy the keys printed above into ${BD}.env.local${RST}:"
     echo ""
-    echo "  After ${BD}supabase start${RST} prints the local keys, paste them into ${BD}.env.local${RST}:"
+    echo "  ${DIM}  # From the 'APIs' section of supabase start output:${RST}"
+    printf "  ${DIM}  %-44s${RST}  ${DIM}# Project URL${RST}\n" "NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321"
     echo ""
-    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321${RST}"
-    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_ANON_KEY=<printed anon key>${RST}"
-    echo "    ${DIM}SUPABASE_SERVICE_ROLE_KEY=<printed service role key>${RST}"
+    echo "  ${DIM}  # From the 'Authentication Keys' section of supabase start output:${RST}"
+    printf "  ${DIM}  %-44s${RST}  ${DIM}# 'Publishable' key${RST}\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY=<Publishable key>"
+    printf "  ${DIM}  %-44s${RST}  ${DIM}# 'Secret' key${RST}\n"     "SUPABASE_SERVICE_ROLE_KEY=<Secret key>"
   else
     warn "supabase CLI not found or Docker not running."
     echo "  ${DIM}  Install: brew install supabase/tap/supabase  (Mac)${RST}"
     echo "  ${DIM}         or: https://supabase.com/docs/guides/cli${RST}"
+    echo ""
+    echo "  Once installed, run these commands manually:"
+    echo ""
+    echo "  ${DIM}  \$ supabase start     ${RST}  ${DIM}# launches Postgres + Auth + Storage containers, prints local keys${RST}"
+    echo "  ${DIM}  \$ supabase db push   ${RST}  ${DIM}# applies migrations from supabase/migrations/ to the local DB${RST}"
+    echo ""
+    echo "  Then add the printed keys to ${BD}.env.local${RST}:"
+    echo ""
+    echo "  ${DIM}  NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321${RST}   ${DIM}# Project URL${RST}"
+    echo "  ${DIM}  NEXT_PUBLIC_SUPABASE_ANON_KEY=<Publishable key>  ${RST}  ${DIM}# Authentication Keys → Publishable${RST}"
+    echo "  ${DIM}  SUPABASE_SERVICE_ROLE_KEY=<Secret key>           ${RST}  ${DIM}# Authentication Keys → Secret${RST}"
   fi
 
   # ── 5. Summary ──────────────────────────────────────────────────────────────
   echo ""
   echo "  ${BD}Next steps${RST}"
-  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ANTHROPIC_API_KEY)"
-  echo "  ${DIM}  2.${RST}  ${BD}supabase start && supabase db push${RST}  (local DB)"
-  echo "  ${DIM}  3.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
-  echo "  ${DIM}  4.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
+  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ANTHROPIC_API_KEY + Supabase keys from above)"
+  if [[ "$docker_ok" == "false" ]] || ! command -v supabase >/dev/null 2>&1; then
+    echo "  ${DIM}  2.${RST}  Install supabase CLI, then: ${BD}supabase start && supabase db push${RST}"
+    echo "  ${DIM}  3.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
+    echo "  ${DIM}  4.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
+  else
+    echo "  ${DIM}  2.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
+    echo "  ${DIM}  3.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
+  fi
   echo ""
 }
 
