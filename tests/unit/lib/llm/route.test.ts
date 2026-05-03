@@ -9,6 +9,14 @@ vi.mock("@anthropic-ai/sdk", () => ({
   })),
 }))
 
+// Mock Gemini SDK
+const geminiCreateMock = vi.fn()
+vi.mock("@google/generative-ai", () => ({
+  GoogleGenerativeAI: vi.fn().mockImplementation(() => ({
+    getGenerativeModel: vi.fn().mockReturnValue({ generateContent: geminiCreateMock }),
+  })),
+}))
+
 function makeAnthropicResponse(text: string, model: string) {
   return {
     content: [{ type: "text", text }],
@@ -17,10 +25,16 @@ function makeAnthropicResponse(text: string, model: string) {
   }
 }
 
+function makeGeminiResponse(text: string) {
+  return { response: { text: () => text } }
+}
+
 describe("selectModel — tier-based routing", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
     createMock.mockResolvedValue(makeAnthropicResponse("cleaned", "claude-haiku-4-5-20251001"))
   })
 
@@ -67,6 +81,8 @@ describe("runCleanup — intensity → prompt dispatch", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
     createMock.mockResolvedValue(makeAnthropicResponse("result text", "claude-haiku-4-5-20251001"))
   })
 
@@ -96,6 +112,8 @@ describe("runCleanup — cost calculation", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
   })
 
   it("calculates cost using haiku pricing for haiku model", async () => {
@@ -127,6 +145,8 @@ describe("generateTitle", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
     createMock.mockResolvedValue({
       content: [{ type: "text", text: "My Generated Title" }],
       model: "claude-haiku-4-5-20251001",
@@ -155,5 +175,93 @@ describe("generateTitle", () => {
     const { generateTitle } = await import("@/lib/llm/route")
     await generateTitle("content", "en")
     expect(createMock.mock.calls[0]?.[0]?.model).toContain("haiku")
+  })
+})
+
+describe("runCleanup — Gemini fallback (no Anthropic key)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "gemini-key")
+    geminiCreateMock.mockResolvedValue(makeGeminiResponse("gemini cleaned text"))
+  })
+
+  it("routes to Gemini when ANTHROPIC_API_KEY is absent", async () => {
+    const { runCleanup } = await import("@/lib/llm/route")
+    const result = await runCleanup("transcript", "light", "en", "free")
+    expect(result.summary).toBe("gemini cleaned text")
+    expect(result.model).toContain("gemini")
+    expect(result.costUsd).toBe(0)
+    expect(createMock).not.toHaveBeenCalled()
+  })
+
+  it("routes all intensity modes through Gemini", async () => {
+    const intensities: NoteIntensity[] = ["verbatim", "light", "full"]
+    for (const intensity of intensities) {
+      vi.clearAllMocks()
+      vi.resetModules()
+      vi.stubEnv("ANTHROPIC_API_KEY", "")
+      vi.stubEnv("GOOGLE_GEMINI_API_KEY", "gemini-key")
+      geminiCreateMock.mockResolvedValue(makeGeminiResponse("result"))
+      const { runCleanup } = await import("@/lib/llm/route")
+      const result = await runCleanup("t", intensity, "en", "free")
+      expect(result.summary).toBe("result")
+    }
+  })
+})
+
+describe("generateTitle — Gemini fallback (no Anthropic key)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "gemini-key")
+    geminiCreateMock.mockResolvedValue(makeGeminiResponse("Gemini Title"))
+  })
+
+  it("returns Gemini-generated title when ANTHROPIC_API_KEY is absent", async () => {
+    const { generateTitle } = await import("@/lib/llm/route")
+    const title = await generateTitle("content", "en")
+    expect(title).toBe("Gemini Title")
+    expect(createMock).not.toHaveBeenCalled()
+  })
+
+  it("returns 'Untitled' when Gemini returns empty string", async () => {
+    geminiCreateMock.mockResolvedValue(makeGeminiResponse(""))
+    const { generateTitle } = await import("@/lib/llm/route")
+    const title = await generateTitle("content", "en")
+    expect(title).toBe("Untitled")
+  })
+})
+
+describe("runCleanup — no provider configured", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
+  })
+
+  it("throws when neither ANTHROPIC_API_KEY nor GOOGLE_GEMINI_API_KEY is set", async () => {
+    const { runCleanup } = await import("@/lib/llm/route")
+    await expect(runCleanup("t", "light", "en", "free")).rejects.toThrow(
+      "No LLM provider configured",
+    )
+  })
+})
+
+describe("generateTitle — no provider configured", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
+  })
+
+  it("returns 'Untitled' when no provider is configured", async () => {
+    const { generateTitle } = await import("@/lib/llm/route")
+    const title = await generateTitle("content", "en")
+    expect(title).toBe("Untitled")
   })
 })
