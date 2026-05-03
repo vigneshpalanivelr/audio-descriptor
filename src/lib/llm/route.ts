@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk"
+import OpenAI from "openai"
 import { GoogleGenerativeAI } from "@google/generative-ai"
 import { isIndianLanguage } from "@/lib/stt/languages"
 import { buildVerbatimPrompt } from "./prompts/verbatim"
@@ -10,12 +11,42 @@ import type { NoteIntensity, UserTier } from "@/types"
 // Override via GEMINI_LLM_MODEL in .env.local
 const GEMINI_LLM_MODEL = process.env["GEMINI_LLM_MODEL"] ?? "gemini-2.5-flash"
 
+type LlmProvider = "anthropic" | "openai" | "gemini"
+
+const VALID_PROVIDERS = new Set<string>(["anthropic", "openai", "gemini"])
+
+function resolveProvider(): LlmProvider | undefined {
+  /* c8 ignore next */
+  const configured = process.env["LLM_PROVIDER"] ?? ""
+  if (VALID_PROVIDERS.has(configured)) return configured as LlmProvider
+  if (process.env["ANTHROPIC_API_KEY"]) return "anthropic"
+  if (process.env["OPENAI_API_KEY"]) return "openai"
+  if (process.env["GOOGLE_GEMINI_API_KEY"]) return "gemini"
+  return undefined
+}
+
+function selectProvider(): LlmProvider {
+  const provider = resolveProvider()
+  if (provider) return provider
+  throw new Error(
+    "No LLM provider configured. Set LLM_PROVIDER=anthropic|openai|gemini and the matching API key.",
+  )
+}
+
 function selectAnthropicModel(tier: UserTier, outputLanguage: string): string {
   if (tier === "pro" || tier === "pro_plus_local") {
     if (isIndianLanguage(outputLanguage)) return "claude-haiku-4-5-20251001"
     return "claude-sonnet-4-6"
   }
   return "claude-haiku-4-5-20251001"
+}
+
+function selectOpenAIModel(tier: UserTier, outputLanguage: string): string {
+  if (tier === "pro" || tier === "pro_plus_local") {
+    if (isIndianLanguage(outputLanguage)) return "gpt-4o-mini"
+    return "gpt-4o"
+  }
+  return "gpt-4o-mini"
 }
 
 function buildPrompt(intensity: NoteIntensity, transcript: string, outputLanguage: string): string {
@@ -61,6 +92,33 @@ async function runCleanupWithAnthropic(
   return { summary: text.trim(), model, costUsd }
 }
 
+async function runCleanupWithOpenAI(
+  transcript: string,
+  intensity: NoteIntensity,
+  outputLanguage: string,
+  tier: UserTier,
+): Promise<CleanupResult> {
+  const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] })
+  const model = selectOpenAIModel(tier, outputLanguage)
+  const prompt = buildPrompt(intensity, transcript, outputLanguage)
+
+  const response = await openai.chat.completions.create({
+    model,
+    max_tokens: 4096,
+    messages: [{ role: "user", content: prompt }],
+  })
+
+  const text = response.choices[0]?.message.content ?? ""
+  const inputTokens = response.usage?.prompt_tokens ?? 0
+  const outputTokens = response.usage?.completion_tokens ?? 0
+  // gpt-4o: $2.5/M input, $10/M output; gpt-4o-mini: $0.15/M input, $0.6/M output
+  const pricePerMInput = model === "gpt-4o" ? 2.5 : 0.15
+  const pricePerMOutput = model === "gpt-4o" ? 10 : 0.6
+  const costUsd = (inputTokens * pricePerMInput + outputTokens * pricePerMOutput) / 1_000_000
+
+  return { summary: text.trim(), model, costUsd }
+}
+
 async function runCleanupWithGemini(
   transcript: string,
   intensity: NoteIntensity,
@@ -88,6 +146,19 @@ async function generateTitleWithAnthropic(content: string, language: string): Pr
   return response.content[0]?.type === "text" ? response.content[0].text.trim() : "Untitled"
 }
 
+async function generateTitleWithOpenAI(content: string, language: string): Promise<string> {
+  const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] })
+  const prompt = buildTitlePrompt(content, language)
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    max_tokens: 32,
+    messages: [{ role: "user", content: prompt }],
+  })
+
+  return response.choices[0]?.message.content?.trim() || "Untitled"
+}
+
 async function generateTitleWithGemini(content: string, language: string): Promise<string> {
   /* c8 ignore next */
   const genAI = new GoogleGenerativeAI(process.env["GOOGLE_GEMINI_API_KEY"] ?? "")
@@ -104,21 +175,18 @@ export async function runCleanup(
   outputLanguage: string,
   tier: UserTier,
 ): Promise<CleanupResult> {
-  if (process.env["ANTHROPIC_API_KEY"]) {
+  const provider = selectProvider()
+  if (provider === "anthropic")
     return runCleanupWithAnthropic(transcript, intensity, outputLanguage, tier)
-  }
-  if (process.env["GOOGLE_GEMINI_API_KEY"]) {
-    return runCleanupWithGemini(transcript, intensity, outputLanguage)
-  }
-  throw new Error("No LLM provider configured. Set ANTHROPIC_API_KEY or GOOGLE_GEMINI_API_KEY.")
+  if (provider === "openai")
+    return runCleanupWithOpenAI(transcript, intensity, outputLanguage, tier)
+  return runCleanupWithGemini(transcript, intensity, outputLanguage)
 }
 
 export async function generateTitle(content: string, language: string): Promise<string> {
-  if (process.env["ANTHROPIC_API_KEY"]) {
-    return generateTitleWithAnthropic(content, language)
-  }
-  if (process.env["GOOGLE_GEMINI_API_KEY"]) {
-    return generateTitleWithGemini(content, language)
-  }
-  return "Untitled"
+  const provider = resolveProvider()
+  if (!provider) return "Untitled"
+  if (provider === "anthropic") return generateTitleWithAnthropic(content, language)
+  if (provider === "openai") return generateTitleWithOpenAI(content, language)
+  return generateTitleWithGemini(content, language)
 }
