@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import crypto from "crypto"
-import { verifyRazorpaySignature } from "@/lib/security/webhook"
-import { checkRateLimit } from "@/lib/security/ratelimit"
+import { verifyRazorpaySignature, verifyLemonSqueezySignature } from "@/lib/security/webhook"
+import { checkRateLimit, RATE_LIMITS } from "@/lib/security/ratelimit"
 import {
   uuidSchema,
   isAllowedAudioMimeType,
@@ -10,6 +10,7 @@ import {
   isSafeRedirectPath,
 } from "@/lib/security/sanitize"
 import { canRecord } from "@/lib/usage/limits"
+import { isCostCapExceeded } from "@/lib/cost/cap"
 
 // ──────────────────────────────────────────────────────────────────────────────
 // ATTACK SCENARIO TESTS
@@ -208,5 +209,78 @@ describe("ATTACK: Usage Cap Bypass", () => {
 
   it("blocks negative requested minutes (attack: integer underflow)", () => {
     expect(canRecord("free", 30, -999)).toBe(false)
+  })
+})
+
+describe("ATTACK: Daily Cost Cap Bypass", () => {
+  it("flags spend equal to cap as exceeded", () => {
+    expect(isCostCapExceeded(20, 20)).toBe(true)
+  })
+
+  it("flags spend above cap as exceeded", () => {
+    expect(isCostCapExceeded(20.01, 20)).toBe(true)
+  })
+
+  it("does not block when spend is just below cap", () => {
+    expect(isCostCapExceeded(19.99, 20)).toBe(false)
+  })
+
+  it("does not block when cap is zero (disabled)", () => {
+    // Setting cap to 0 means no cap enforced
+    expect(isCostCapExceeded(9999, 0)).toBe(false)
+  })
+})
+
+describe("ATTACK: LemonSqueezy Webhook Spoofing", () => {
+  const body = '{"meta":{"event_name":"order_created"}}'
+  const secret = "ls-webhook-secret-test"
+
+  it("blocks request with no signature header", () => {
+    expect(verifyLemonSqueezySignature(body, null, secret)).toBe(false)
+  })
+
+  it("blocks request with forged signature (no sha256= prefix)", () => {
+    expect(verifyLemonSqueezySignature(body, "0".repeat(64), secret)).toBe(false)
+  })
+
+  it("blocks request with sha256= prefix but wrong digest", () => {
+    expect(verifyLemonSqueezySignature(body, "sha256=" + "0".repeat(64), secret)).toBe(false)
+  })
+
+  it("allows valid sha256= prefixed signature", () => {
+    const hmac = crypto.createHmac("sha256", secret).update(body).digest("hex")
+    expect(verifyLemonSqueezySignature(body, `sha256=${hmac}`, secret)).toBe(true)
+  })
+
+  it("blocks request where body was tampered after signing", () => {
+    const hmac = crypto.createHmac("sha256", secret).update(body).digest("hex")
+    const tampered = body.replace("order_created", "subscription_created")
+    expect(verifyLemonSqueezySignature(tampered, `sha256=${hmac}`, secret)).toBe(false)
+  })
+})
+
+describe("ATTACK: Regenerate + Checkout Rate Limiting", () => {
+  it("blocks excess regenerate requests from same IP", () => {
+    const ip = `regen-attack-${Date.now()}`
+    for (let i = 0; i < RATE_LIMITS.regenerate.maxRequests; i++) {
+      checkRateLimit(ip, RATE_LIMITS.regenerate)
+    }
+    expect(checkRateLimit(ip, RATE_LIMITS.regenerate).allowed).toBe(false)
+  })
+
+  it("blocks excess checkout requests from same IP", () => {
+    const ip = `checkout-attack-${Date.now()}`
+    for (let i = 0; i < RATE_LIMITS.checkout.maxRequests; i++) {
+      checkRateLimit(ip, RATE_LIMITS.checkout)
+    }
+    expect(checkRateLimit(ip, RATE_LIMITS.checkout).allowed).toBe(false)
+  })
+
+  it("checkout limit is stricter than upload limit", () => {
+    expect(RATE_LIMITS.checkout.maxRequests).toBeLessThan(RATE_LIMITS.upload.maxRequests)
+  })
+
+  it("regenerate limit is stricter than upload limit", () => {
+    expect(RATE_LIMITS.regenerate.maxRequests).toBeLessThanOrEqual(RATE_LIMITS.upload.maxRequests)
   })
 })

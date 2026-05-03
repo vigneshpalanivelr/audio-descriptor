@@ -23,8 +23,9 @@ export default defineConfig({
         "src/app/**",
         // shadcn/ui generated components
         "src/components/ui/**",
-        // Browser-API-heavy recording components — tested via E2E
+        // Browser-API-heavy components — tested via E2E
         "src/components/recording/**",
+        "src/components/providers/**",
         // Infrastructure clients — thin wrappers, no logic to test
         "src/lib/supabase/**",
         // STT adapter implementations — tested indirectly via route mocks

@@ -11,6 +11,7 @@ import { canRecord, getNoteDurationLimit } from "@/lib/usage/limits"
 import { API_ERRORS, handleRouteError } from "@/lib/api/error"
 import { inngest } from "@/lib/inngest/client"
 import { appLogger } from "@/lib/logger"
+import { parseCostCap, isCostCapExceeded } from "@/lib/cost/cap"
 import type { UserTier } from "@/types"
 
 const uploadMetaSchema = z.object({
@@ -27,9 +28,24 @@ function currentMonth(): string {
   return new Date().toISOString().slice(0, 7)
 }
 
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
 function resolveMaxSize(tier: UserTier): number {
   if (tier === "pro" || tier === "pro_plus_local") return MAX_AUDIO_SIZE_PRO
   return MAX_AUDIO_SIZE_FREE
+}
+
+async function getDailySpendUsd(
+  serviceClient: ReturnType<typeof createServiceClient>,
+): Promise<number> {
+  const { data } = await serviceClient
+    .from("notes")
+    .select("cost_usd")
+    .gte("ready_at", `${today()}T00:00:00.000Z`)
+    .not("cost_usd", "is", null)
+  return (data ?? []).reduce((sum, row) => sum + ((row.cost_usd as number) ?? 0), 0)
 }
 
 export async function POST(request: NextRequest) {
@@ -59,7 +75,7 @@ export async function POST(request: NextRequest) {
 
     const serviceClient = createServiceClient()
 
-    const [profileResult, usageResult] = await Promise.all([
+    const [profileResult, usageResult, dailySpend] = await Promise.all([
       serviceClient.from("profiles").select("tier").eq("id", user.id).single(),
       serviceClient
         .from("usage")
@@ -67,7 +83,13 @@ export async function POST(request: NextRequest) {
         .eq("user_id", user.id)
         .eq("month", currentMonth())
         .maybeSingle(),
+      getDailySpendUsd(serviceClient),
     ])
+
+    if (isCostCapExceeded(dailySpend, parseCostCap())) {
+      appLogger.warn({ dailySpend }, "upload:daily_cost_cap_exceeded")
+      return API_ERRORS.serviceUnavailable("Daily processing limit reached — try again tomorrow")
+    }
 
     const tier = ((profileResult.data?.tier as UserTier | undefined) ?? "free") satisfies UserTier
     const minutesUsed = (usageResult.data?.minutes_used as number | undefined) ?? 0

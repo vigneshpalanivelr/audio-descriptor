@@ -584,30 +584,30 @@ graph LR
 | `/api/inngest` webhook handler                              | ✅     | `src/app/api/inngest/route.ts`                            |
 | Note detail page with live status polling                   | ✅     | `src/app/(app)/notes/[id]/page.tsx` (3 s poll)            |
 
-### Session 4 — Inngest Pipeline ⏳ Pending
+### Session 4 — Inngest Pipeline ✅ Complete
 
-| Deliverable                                      | Status |
-| ------------------------------------------------ | ------ |
-| Inngest client + `transcribe.ts` function        | ⏳     |
-| `cleanup.ts` function (LLM routing)              | ⏳     |
-| `/api/inngest` webhook handler                   | ⏳     |
-| Supabase Realtime → live status on client        | ⏳     |
-| Cost guard: check daily spend cap before queuing | ⏳     |
+| Deliverable                                      | Status | Notes                                                                   |
+| ------------------------------------------------ | ------ | ----------------------------------------------------------------------- |
+| Inngest client + `transcribe.ts` function        | ✅     | `src/lib/inngest/transcribe.ts` — NonRetriableError on 429/404          |
+| `cleanup.ts` function (LLM routing)              | ✅     | `src/lib/inngest/cleanup.ts` — cost cap guard + usage UPSERT            |
+| `/api/inngest` webhook handler                   | ✅     | `src/app/api/inngest/route.ts` — serves 3 functions                     |
+| Supabase Realtime → live status on client        | ✅     | `NoteDetailClient.tsx` — postgres_changes subscription replaces polling |
+| Cost guard: check daily spend cap before queuing | ✅     | `src/lib/cost/cap.ts` — checked in upload route + cleanup function      |
 
-### Session 5 — Notes + Payments + Observability ⏳ Pending
+### Session 5 — Notes + Payments + Observability ✅ Complete
 
-| Deliverable                                                 | Status |
-| ----------------------------------------------------------- | ------ |
-| Notes list view (cards + status badges)                     | ⏳     |
-| Single note view (side-by-side transcript ↔ summary)        | ⏳     |
-| Edit summary in-place + regenerate with different intensity | ⏳     |
-| Razorpay checkout + webhook handler                         | ⏳     |
-| Lemon Squeezy checkout + webhook handler                    | ⏳     |
-| Idempotent `payment_events` inserts                         | ⏳     |
-| PostHog wiring (session replay off on `/notes`)             | ⏳     |
-| Sentry error boundary + DSN                                 | ⏳     |
-| `cost-digest.ts` cron — daily email via Resend              | ⏳     |
-| Daily company spend cap ($20) pre-flight check              | ⏳     |
+| Deliverable                                                 | Status | Notes                                                                 |
+| ----------------------------------------------------------- | ------ | --------------------------------------------------------------------- |
+| Notes list view (cards + status badges)                     | ✅     | `src/app/(app)/notes/page.tsx` — server component, fetches 50 notes   |
+| Single note view (side-by-side transcript ↔ summary)        | ✅     | `NoteDetailClient.tsx` — `md:grid-cols-2` responsive layout           |
+| Edit summary in-place + regenerate with different intensity | ✅     | `POST /api/notes/[id]/regenerate` + intensity buttons in UI           |
+| Razorpay checkout + webhook handler                         | ✅     | `src/app/api/payments/razorpay/` — HMAC-verified, idempotent          |
+| Lemon Squeezy checkout + webhook handler                    | ✅     | `src/app/api/payments/lemonsqueezy/` — sha256= sig, idempotent        |
+| Idempotent `payment_events` inserts                         | ✅     | Unique constraint on `external_event_id` — duplicate 23505 → 200      |
+| PostHog wiring (session replay off on `/notes`)             | ✅     | `PostHogProvider.tsx` — stopSessionRecording on /notes routes         |
+| Sentry error boundary + DSN                                 | ✅     | `sentry.{client,server,edge}.config.ts` — prod-only, no replay        |
+| `cost-digest.ts` cron — daily email via Resend              | ✅     | `src/lib/inngest/cost-digest.ts` — daily 00:00 UTC, emails via Resend |
+| Daily company spend cap ($20) pre-flight check              | ✅     | Checked in upload route + cleanup step; returns 503 when exceeded     |
 
 ### Phase 2 — Competitive Parity (Weeks 5–10)
 

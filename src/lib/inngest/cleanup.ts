@@ -1,13 +1,44 @@
+import { NonRetriableError } from "inngest"
 import { inngest } from "./client"
 import { createServiceClient } from "@/lib/supabase/service"
 import { runCleanup, generateTitle } from "@/lib/llm/route"
+import { parseCostCap, isCostCapExceeded } from "@/lib/cost/cap"
+import { appLogger } from "@/lib/logger"
 import type { UserTier } from "@/types"
+
+async function getDailySpendUsd(): Promise<number> {
+  const db = createServiceClient()
+  const today = new Date().toISOString().slice(0, 10)
+  const { data } = await db
+    .from("notes")
+    .select("cost_usd")
+    .gte("ready_at", `${today}T00:00:00.000Z`)
+    .not("cost_usd", "is", null)
+  return (data ?? []).reduce((sum, row) => sum + ((row.cost_usd as number) ?? 0), 0)
+}
 
 export const cleanupNote = inngest.createFunction(
   { id: "cleanup-note", retries: 2 },
   { event: "note/note.transcribed" },
   async ({ event, step }) => {
     const { noteId, userId, transcriptRaw, language, intensity, tier, durationSec } = event.data
+
+    // Guard: halt if today's company-wide spend already hit the cap
+    await step.run("check-cost-cap", async () => {
+      const spend = await getDailySpendUsd()
+      if (isCostCapExceeded(spend, parseCostCap())) {
+        appLogger.warn({ noteId, spend }, "cleanup:daily_cost_cap_exceeded")
+        const db = createServiceClient()
+        await db
+          .from("notes")
+          .update({
+            status: "failed",
+            error: "Daily processing limit reached — try again tomorrow",
+          })
+          .eq("id", noteId)
+        throw new NonRetriableError("Daily cost cap exceeded")
+      }
+    })
 
     const cleanupResult = await step.run("run-llm-cleanup", async () => {
       return runCleanup(

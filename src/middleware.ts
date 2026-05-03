@@ -1,46 +1,40 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
-import { checkRateLimit, RATE_LIMITS } from "@/lib/security/ratelimit"
+import { checkRateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/security/ratelimit"
 
 const PROTECTED_PATHS = ["/notes", "/settings"]
 const AUTH_PATHS = ["/auth/sign-in"]
 
-export async function middleware(request: NextRequest) {
-  const response = NextResponse.next({ request })
-  const { pathname } = request.nextUrl
-  const { method } = request
+function tooManyRequests(resetAt: number): NextResponse {
+  return new NextResponse("Too Many Requests", {
+    status: 429,
+    headers: { "Retry-After": String(Math.ceil((resetAt - Date.now()) / 1000)) },
+  })
+}
 
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown"
+function applyRateLimit(key: string, config: RateLimitConfig): NextResponse | null {
+  const result = checkRateLimit(key, config)
+  return result.allowed ? null : tooManyRequests(result.resetAt)
+}
 
-  // Rate-limit audio upload/transcription routes
+function resolveRateLimit(pathname: string, method: string, ip: string): NextResponse | null {
   if (pathname.startsWith("/api/upload") || pathname.startsWith("/api/transcribe")) {
-    const result = checkRateLimit(`upload:${ip}`, RATE_LIMITS.upload)
-    if (!result.allowed) {
-      return new NextResponse("Too Many Requests", {
-        status: 429,
-        headers: { "Retry-After": String(Math.ceil((result.resetAt - Date.now()) / 1000)) },
-      })
-    }
+    return applyRateLimit(`upload:${ip}`, RATE_LIMITS.upload)
   }
-
-  // Rate-limit sign-in POST (brute-force protection)
+  if (pathname.match(/^\/api\/notes\/[^/]+\/regenerate$/) && method === "POST") {
+    return applyRateLimit(`regen:${ip}`, RATE_LIMITS.regenerate)
+  }
+  if (pathname.match(/^\/api\/payments\/[^/]+\/checkout$/) && method === "POST") {
+    return applyRateLimit(`checkout:${ip}`, RATE_LIMITS.checkout)
+  }
   if (pathname === "/auth/sign-in" && method === "POST") {
-    const result = checkRateLimit(`signin:${ip}`, RATE_LIMITS.signIn)
-    if (!result.allowed) {
-      return new NextResponse("Too Many Requests", {
-        status: 429,
-        headers: { "Retry-After": String(Math.ceil((result.resetAt - Date.now()) / 1000)) },
-      })
-    }
+    return applyRateLimit(`signin:${ip}`, RATE_LIMITS.signIn)
   }
+  return null
+}
 
-  // Auth check for protected routes
-  const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p))
-  const isAuthPath = AUTH_PATHS.some((p) => pathname.startsWith(p))
-
-  if (!isProtected && !isAuthPath) return response
-
-  const supabase = createServerClient(
+function buildSupabaseMiddlewareClient(request: NextRequest, response: NextResponse) {
+  return createServerClient(
     process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
     process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"]!,
     {
@@ -55,7 +49,22 @@ export async function middleware(request: NextRequest) {
       },
     },
   )
+}
 
+export async function middleware(request: NextRequest) {
+  const response = NextResponse.next({ request })
+  const { pathname, method } = { pathname: request.nextUrl.pathname, method: request.method }
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown"
+
+  const rateLimitResponse = resolveRateLimit(pathname, method, ip)
+  if (rateLimitResponse) return rateLimitResponse
+
+  const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p))
+  const isAuthPath = AUTH_PATHS.some((p) => pathname.startsWith(p))
+
+  if (!isProtected && !isAuthPath) return response
+
+  const supabase = buildSupabaseMiddlewareClient(request, response)
   const {
     data: { user },
   } = await supabase.auth.getUser()
