@@ -418,12 +418,15 @@ src/
 │   │   └── admin/page.tsx          ✅ Admin dashboard — double auth guard
 │   ├── (app)/
 │   │   ├── layout.tsx              ✅ Auth guard layout (server component)
-│   │   └── notes/page.tsx          ✅ Empty state + "New Note" stub
+│   │   ├── notes/page.tsx          ✅ Empty state + "New Note" stub
+│   │   ├── notes/new/page.tsx      ✅ Recorder page
+│   │   └── notes/[id]/page.tsx     ✅ Note detail — title edit + status polling
 │   ├── api/
 │   │   ├── admin/
 │   │   │   ├── stats/route.ts      ✅ Admin stats (auth + admin check)
 │   │   │   └── users/route.ts      ✅ Paginated users (Zod-validated params)
-│   │   └── [upload, inngest, webhooks — Session 3–5]
+│   │   ├── inngest/route.ts        ✅ Inngest webhook (GET/POST/PUT serve handler)
+│   │   └── upload/route.ts         ✅ Audio upload + Inngest event dispatch
 │   ├── auth/
 │   │   ├── callback/route.ts       ✅ PKCE code exchange + safe redirect
 │   │   ├── sign-in/
@@ -455,6 +458,10 @@ src/
 │   │   ├── openai.ts               ✅ gpt-4o-mini-transcribe adapter
 │   │   ├── sarvam.ts               ✅ Saaras v3 adapter (feature-flagged)
 │   │   └── elevenlabs.ts           ✅ Scribe v2 adapter (feature-flagged)
+│   ├── inngest/
+│   │   ├── client.ts               ✅ Inngest client + typed EventSchemas
+│   │   ├── transcribe.ts           ✅ transcribeNote function (audio.uploaded)
+│   │   └── cleanup.ts              ✅ cleanupNote function (note.transcribed)
 │   ├── supabase/
 │   │   ├── client.ts               ✅ Browser client
 │   │   ├── server.ts               ✅ Server client (SSR cookies)
@@ -560,17 +567,22 @@ graph LR
 | Hindi landing page (`/hi`)                            | ⏳     | Deferred to Session 2b           |
 | Onboarding language selector                          | ⏳     | Deferred to Session 3            |
 
-### Session 3 — Recorder UI + Upload ⏳ Pending
+### Session 3 — Recorder UI + Upload ✅ Complete
 
-| Deliverable                                                 | Status |
-| ----------------------------------------------------------- | ------ |
-| `MediaRecorder` component (webm/opus + Safari mp4 fallback) | ⏳     |
-| Live waveform (`AnalyserNode`) + timer + pause/resume       | ⏳     |
-| Verbatim / Light / Full intensity radio selector            | ⏳     |
-| Language pill with auto-detect + manual override            | ⏳     |
-| Hard server-side cap enforcement before upload              | ⏳     |
-| `ffmpeg-wasm` chunk split for files > 25MB                  | ⏳     |
-| `/api/upload` route handler                                 | ⏳     |
+| Deliverable                                                 | Status | Notes                                                     |
+| ----------------------------------------------------------- | ------ | --------------------------------------------------------- |
+| `MediaRecorder` component (webm/opus + Safari mp4 fallback) | ✅     | `src/components/recording/Recorder.tsx`                   |
+| Live waveform (`AnalyserNode`) + timer + pause/resume       | ✅     | `Waveform.tsx` + split useEffect timer fix                |
+| Verbatim / Light / Full intensity radio selector            | ✅     | INTENSITY_LABELS Map + aria-pressed buttons               |
+| Language pill with auto-detect + manual override            | ✅     | LANGUAGES array + select element                          |
+| Hard server-side cap enforcement before upload              | ✅     | `canRecord` + `getNoteDurationLimit` in upload route      |
+| `ffmpeg-wasm` re-encode for blobs > 25MB                    | ✅     | `compressIfNeeded()` lazy-loads @ffmpeg/core at 48kbps    |
+| `/api/upload` route handler                                 | ✅     | Zod validation + storage upload + Inngest event           |
+| Inngest client + `audio/note.uploaded` event firing         | ✅     | `src/lib/inngest/client.ts` + upload route                |
+| `transcribeNote` Inngest function                           | ✅     | `src/lib/inngest/transcribe.ts` (signed URL → STT)        |
+| `cleanupNote` Inngest function                              | ✅     | `src/lib/inngest/cleanup.ts` (LLM routing + usage UPSERT) |
+| `/api/inngest` webhook handler                              | ✅     | `src/app/api/inngest/route.ts`                            |
+| Note detail page with live status polling                   | ✅     | `src/app/(app)/notes/[id]/page.tsx` (3 s poll)            |
 
 ### Session 4 — Inngest Pipeline ⏳ Pending
 
