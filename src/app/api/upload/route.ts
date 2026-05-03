@@ -10,6 +10,7 @@ import {
 import { canRecord, getNoteDurationLimit } from "@/lib/usage/limits"
 import { API_ERRORS, handleRouteError } from "@/lib/api/error"
 import { inngest } from "@/lib/inngest/client"
+import { appLogger } from "@/lib/logger"
 import type { UserTier } from "@/types"
 
 const uploadMetaSchema = z.object({
@@ -109,24 +110,31 @@ export async function POST(request: NextRequest) {
       .upload(storagePath, arrayBuffer, { contentType: resolvedMime, upsert: false })
 
     if (storageErr) {
+      appLogger.error({ err: storageErr, storagePath }, "upload:storage_write_failed")
       await serviceClient.from("notes").delete().eq("id", note.id)
       return API_ERRORS.internalError()
     }
 
     await serviceClient.from("notes").update({ audio_storage_path: storagePath }).eq("id", note.id)
 
-    await inngest.send({
-      name: "audio/note.uploaded",
-      data: {
-        noteId: note.id as string,
-        userId: user.id,
-        storagePath,
-        durationSec: meta.durationSec,
-        language: meta.language,
-        intensity: meta.intensity,
-        tier,
-      },
-    })
+    try {
+      await inngest.send({
+        name: "audio/note.uploaded",
+        data: {
+          noteId: note.id as string,
+          userId: user.id,
+          storagePath,
+          durationSec: meta.durationSec,
+          language: meta.language,
+          intensity: meta.intensity,
+          tier,
+        },
+      })
+    } catch (inngestErr) {
+      // Non-fatal: note is saved; transcription can be retried manually.
+      // Inngest dev server may not be running in local environments.
+      appLogger.warn({ err: inngestErr, noteId: note.id }, "upload:inngest_send_failed")
+    }
 
     return Response.json({ noteId: note.id }, { status: 201 })
   } catch (err) {
