@@ -22,6 +22,7 @@ LOG_FILE="logs/server.log"
 APP_NAME="QuillCast"
 APP_URL="${NEXT_PUBLIC_APP_URL:-http://localhost:3000}"
 ADMIN_PATH="/admin"
+SUPABASE_API_PORT=54321
 
 # ─── Banner helpers ───────────────────────────────────────────────────────────
 info()    { echo "  ${C}ℹ${RST}  $*"; }
@@ -238,6 +239,160 @@ show_config() {
   echo ""
 }
 
+# ─── Supabase helpers ────────────────────────────────────────────────────────
+
+supabase_is_running() {
+  nc -z 127.0.0.1 "$SUPABASE_API_PORT" 2>/dev/null
+}
+
+# Set KEY=VALUE in .env.local only when the current value is absent or empty.
+env_set_if_empty() {
+  local key="$1" val="$2" file="${3:-.env.local}"
+  [[ -f "$file" ]] || return 0
+  local current
+  current=$(grep "^${key}=" "$file" 2>/dev/null | cut -d= -f2- || true)
+  if [[ -z "$current" ]]; then
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+      sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    else
+      printf "\n%s=%s" "$key" "$val" >> "$file"
+    fi
+    success "Auto-set ${BD}${key}${RST} in .env.local"
+  fi
+}
+
+# Parse output of `supabase start` and auto-fill .env.local
+supabase_parse_and_patch() {
+  local output="$1"
+  local api_url anon_key service_key
+  api_url=$(printf "%s"    "$output" | grep "API URL:"          | sed 's/.*API URL:[[:space:]]*//')
+  anon_key=$(printf "%s"   "$output" | grep "anon key:"         | sed 's/.*anon key:[[:space:]]*//')
+  service_key=$(printf "%s" "$output" | grep "service_role key:" | sed 's/.*service_role key:[[:space:]]*//')
+  [[ -n "$api_url"     ]] && env_set_if_empty "NEXT_PUBLIC_SUPABASE_URL"       "$api_url"
+  [[ -n "$anon_key"    ]] && env_set_if_empty "NEXT_PUBLIC_SUPABASE_ANON_KEY"  "$anon_key"
+  [[ -n "$service_key" ]] && env_set_if_empty "SUPABASE_SERVICE_ROLE_KEY"      "$service_key"
+  [[ -n "$anon_key" ]] && load_env  # reload so next cmd sees fresh values
+}
+
+supabase_do_start() {
+  header "🗄  Starting local Supabase stack"
+  local start_output
+  start_output=$(supabase start 2>&1)
+  echo "$start_output" | colorize_output
+  echo ""
+  supabase_parse_and_patch "$start_output"
+}
+
+supabase_do_push() {
+  run_cmd "Apply pending DB migrations" supabase db push
+}
+
+# Idempotent: called automatically by `start`.
+# Starts Supabase if not running, always applies any pending migrations.
+ensure_supabase() {
+  if ! command -v supabase >/dev/null 2>&1; then
+    warn "supabase CLI not found — skipping local DB setup"
+    info "Install: brew install supabase/tap/supabase  •  scoop install supabase  •  https://supabase.com/docs/guides/cli"
+    return 0
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    warn "Docker not running — skipping local Supabase setup"
+    info "Start Docker Desktop, then run ${BD}./manage.sh db start${RST}"
+    return 0
+  fi
+
+  if supabase_is_running; then
+    info "Supabase stack already running on :${SUPABASE_API_PORT}"
+  else
+    supabase_do_start
+  fi
+  supabase_do_push
+}
+
+# ─── db command ───────────────────────────────────────────────────────────────
+
+cmd_db() {
+  local sub="${1:-status}"
+
+  case "$sub" in
+    start)
+      header "🗄  Supabase — start"
+      if ! command -v supabase >/dev/null 2>&1; then
+        error "supabase CLI not found. Install: brew install supabase/tap/supabase"
+        exit 1
+      fi
+      if ! docker info >/dev/null 2>&1; then
+        error "Docker is not running. Start Docker Desktop first."
+        exit 1
+      fi
+      if supabase_is_running; then
+        info "Supabase stack is already running on :${SUPABASE_API_PORT}"
+      else
+        supabase_do_start
+      fi
+      supabase_do_push
+      ;;
+
+    stop)
+      header "🗄  Supabase — stop"
+      run_cmd "Stop Supabase" supabase stop
+      ;;
+
+    push|migrate)
+      header "🗄  Supabase — apply migrations (local)"
+      run_cmd "Apply pending migrations (supabase db push)" supabase db push
+      ;;
+
+    remote)
+      header "🗄  Supabase — apply migrations (remote/production)"
+      warn "This targets your ${BD}linked remote${RST} project. Ensure you are linked: ${BD}supabase link${RST}"
+      run_cmd "Apply remote migrations (supabase migration up)" supabase migration up
+      ;;
+
+    reset)
+      header "🗄  Supabase — reset local DB"
+      warn "This will ${BR}DROP and recreate all tables${RST} in the local DB."
+      read -rp "  Are you sure? [y/N] " _confirm
+      if [[ "${_confirm,,}" == "y" ]]; then
+        run_cmd "Reset local DB" supabase db reset
+      else
+        info "Aborted."
+      fi
+      ;;
+
+    status)
+      header "🗄  Supabase — status"
+      if supabase_is_running; then
+        success "Local Supabase stack is ${BG}running${RST}"
+        printf "  ${DIM}  %-14s${RST} %b\n" "API"    "${BC}http://localhost:54321${RST}"
+        printf "  ${DIM}  %-14s${RST} %b\n" "Studio" "${BC}http://localhost:54323${RST}"
+        printf "  ${DIM}  %-14s${RST} %b\n" "DB"     "${DIM}postgresql://postgres:postgres@localhost:54322/postgres${RST}"
+      else
+        warn "Local Supabase stack is ${Y}not running${RST}"
+        info "Run ${BD}./manage.sh db start${RST} to start it"
+      fi
+      echo ""
+      ;;
+
+    *)
+      error "Unknown db subcommand: ${sub}"
+      echo ""
+      echo "  Usage: ${BD}./manage.sh db [start|stop|push|migrate|reset|remote|status]${RST}"
+      echo ""
+      echo "    ${DIM}start   ${RST}  Start local stack + apply pending migrations"
+      echo "    ${DIM}stop    ${RST}  Stop local stack"
+      echo "    ${DIM}push    ${RST}  Apply pending migrations to local DB  ${DIM}(alias: migrate)${RST}"
+      echo "    ${DIM}remote  ${RST}  Apply pending migrations to linked remote project"
+      echo "    ${DIM}reset   ${RST}  Drop and recreate local DB from migrations  ${DIM}(destructive)${RST}"
+      echo "    ${DIM}status  ${RST}  Check whether local stack is running"
+      echo ""
+      exit 1
+      ;;
+  esac
+  echo ""
+}
+
 # ─── status ───────────────────────────────────────────────────────────────────
 cmd_status() {
   header "📊  Server Status"
@@ -273,6 +428,8 @@ cmd_start() {
     fi
     rm -f "$PID_FILE"
   fi
+
+  ensure_supabase
 
   mkdir -p logs
 
@@ -586,32 +743,42 @@ cmd_help() {
   cat <<EOF
 
   ${BD}Setup${RST}
-  ${DIM}  install            ${RST}  Check prereqs, pnpm install, create .env.local
+  ${DIM}  install              ${RST}  Check prereqs, pnpm install, create .env.local
 
   ${BD}Server${RST}
-  ${DIM}  start [dev|prod]   ${RST}  Start server ${DIM}(default: dev)${RST}
-  ${DIM}  stop               ${RST}  Stop the running server
-  ${DIM}  restart [dev|prod] ${RST}  Stop → show config → start
-  ${DIM}  build              ${RST}  Production build ${DIM}(shows config first)${RST}
-  ${DIM}  status             ${RST}  PID, URL, admin link
-  ${DIM}  logs               ${RST}  Tail ${LOG_FILE} with colour
+  ${DIM}  start [dev|prod]     ${RST}  Ensure Supabase running + apply migrations, then start app ${DIM}(default: dev)${RST}
+  ${DIM}  stop                 ${RST}  Stop the running app server
+  ${DIM}  restart [dev|prod]   ${RST}  Stop → show config → ensure Supabase → start
+  ${DIM}  build                ${RST}  Production build ${DIM}(shows config first)${RST}
+  ${DIM}  status               ${RST}  PID, URL, admin link
+  ${DIM}  logs                 ${RST}  Tail ${LOG_FILE} with colour
+
+  ${BD}Database (Supabase)${RST}
+  ${DIM}  db start             ${RST}  Start local Supabase stack + apply pending migrations
+  ${DIM}  db stop              ${RST}  Stop local Supabase stack
+  ${DIM}  db push              ${RST}  Apply pending migrations to local DB ${DIM}(alias: db migrate)${RST}
+  ${DIM}  db remote            ${RST}  Apply pending migrations to linked remote project
+  ${DIM}  db reset             ${RST}  Drop + recreate local DB from scratch ${DIM}(destructive!)${RST}
+  ${DIM}  db status            ${RST}  Check whether local stack is running
 
   ${BD}Info${RST}
-  ${DIM}  config             ${RST}  All env vars, secrets redacted
-  ${DIM}  stats              ${RST}  Build ID, memory, last test run
-  ${DIM}  admin              ${RST}  Admin URL + SQL + local dev services
+  ${DIM}  config               ${RST}  All env vars, secrets redacted
+  ${DIM}  stats                ${RST}  Build ID, memory, last test run
+  ${DIM}  admin                ${RST}  Admin URL + SQL + local dev services
 
   ${BD}Tests${RST}
-  ${DIM}  test [suite]       ${RST}  unit | coverage | security | e2e | all ${DIM}(default: all)${RST}
+  ${DIM}  test [suite]         ${RST}  unit | coverage | security | e2e | all ${DIM}(default: all)${RST}
 
   ${BD}Examples${RST}
-  ${DIM}  ./manage.sh start            ${RST}  # dev server
-  ${DIM}  ./manage.sh start prod       ${RST}  # serve production build
-  ${DIM}  ./manage.sh restart          ${RST}  # restart dev (config shown first)
-  ${DIM}  ./manage.sh test coverage    ${RST}  # coverage report
-  ${DIM}  ./manage.sh config           ${RST}  # redacted env dump
-  ${DIM}  ./manage.sh stats            ${RST}  # build + server + test summary
-  ${DIM}  ./manage.sh admin            ${RST}  # console URL + access instructions
+  ${DIM}  ./manage.sh start              ${RST}  # auto-start Supabase, apply migrations, then dev server
+  ${DIM}  ./manage.sh start prod         ${RST}  # same but serve production build
+  ${DIM}  ./manage.sh restart            ${RST}  # restart dev (Supabase + migrations checked first)
+  ${DIM}  ./manage.sh db push            ${RST}  # apply new migrations without restarting app
+  ${DIM}  ./manage.sh db remote          ${RST}  # push migrations to production
+  ${DIM}  ./manage.sh db reset           ${RST}  # nuke + rebuild local DB (dev only)
+  ${DIM}  ./manage.sh test coverage      ${RST}  # coverage report
+  ${DIM}  ./manage.sh config             ${RST}  # redacted env dump
+  ${DIM}  ./manage.sh admin              ${RST}  # console URL + access instructions
 
 EOF
 }
@@ -620,17 +787,18 @@ EOF
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   COMMAND="${1:-help}"
   case "$COMMAND" in
-    install) cmd_install ;;
-    start)   cmd_start   "${2:-dev}" ;;
-    stop)    cmd_stop ;;
-    restart) cmd_restart "${2:-dev}" ;;
-    build)   cmd_build ;;
-    status)  cmd_status ;;
-    logs)    cmd_logs ;;
-    config)  show_config ;;
-    stats)   cmd_stats ;;
-    admin)   cmd_admin ;;
-    test)    cmd_test "${2:-all}" ;;
+    install)  cmd_install ;;
+    start)    cmd_start   "${2:-dev}" ;;
+    stop)     cmd_stop ;;
+    restart)  cmd_restart "${2:-dev}" ;;
+    build)    cmd_build ;;
+    status)   cmd_status ;;
+    logs)     cmd_logs ;;
+    config)   show_config ;;
+    stats)    cmd_stats ;;
+    admin)    cmd_admin ;;
+    test)     cmd_test "${2:-all}" ;;
+    db)       cmd_db "${2:-status}" ;;
     help|--help|-h) cmd_help ;;
     *)
       error "Unknown command: ${COMMAND}"
