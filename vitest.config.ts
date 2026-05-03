@@ -36,8 +36,9 @@ export default defineConfig({
         "src/middleware.ts",
         // Static config — no logic
         "src/config/**",
-        // Inngest client instantiation
-        "src/inngest/client.ts",
+        // Inngest job functions — require Inngest runtime; tested via E2E/integration
+        "src/lib/inngest/**",
+        "src/inngest/**",
         "**/*.d.ts",
         "src/types/**",
         "*.config.*",

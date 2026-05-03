@@ -9,6 +9,7 @@ import {
 } from "@/lib/security/sanitize"
 import { canRecord, getNoteDurationLimit } from "@/lib/usage/limits"
 import { API_ERRORS, handleRouteError } from "@/lib/api/error"
+import { inngest } from "@/lib/inngest/client"
 import type { UserTier } from "@/types"
 
 const uploadMetaSchema = z.object({
@@ -113,6 +114,19 @@ export async function POST(request: NextRequest) {
     }
 
     await serviceClient.from("notes").update({ audio_storage_path: storagePath }).eq("id", note.id)
+
+    await inngest.send({
+      name: "audio/note.uploaded",
+      data: {
+        noteId: note.id as string,
+        userId: user.id,
+        storagePath,
+        durationSec: meta.durationSec,
+        language: meta.language,
+        intensity: meta.intensity,
+        tier,
+      },
+    })
 
     return Response.json({ noteId: note.id }, { status: 201 })
   } catch (err) {

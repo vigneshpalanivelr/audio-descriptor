@@ -56,6 +56,37 @@ function resolveFileExtension(mimeType: string): string {
   return "webm"
 }
 
+// 25 MB — recordings larger than this are re-encoded via ffmpeg-wasm
+const MAX_BLOB_BYTES = 25 * 1024 * 1024
+
+async function compressIfNeeded(blob: Blob, mimeType: string): Promise<Blob> {
+  if (blob.size <= MAX_BLOB_BYTES) return blob
+
+  const { FFmpeg } = await import("@ffmpeg/ffmpeg")
+  const { fetchFile, toBlobURL } = await import("@ffmpeg/util")
+
+  const ffmpeg = new FFmpeg()
+  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm"
+
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+  })
+
+  const ext = resolveFileExtension(mimeType)
+  const inputName = `input.${ext}`
+  const outputName = "output.webm"
+
+  await ffmpeg.writeFile(inputName, await fetchFile(blob))
+  // re-encode to opus at 48kbps — keeps quality adequate for voice at <2MB/min
+  await ffmpeg.exec(["-i", inputName, "-c:a", "libopus", "-b:a", "48k", outputName])
+
+  const rawData = await ffmpeg.readFile(outputName)
+  const uint8 = rawData instanceof Uint8Array ? rawData : new TextEncoder().encode(rawData)
+  // slice(0) copies into a plain ArrayBuffer (avoids SharedArrayBuffer BlobPart incompatibility)
+  return new Blob([uint8.buffer.slice(0) as ArrayBuffer], { type: "audio/webm;codecs=opus" })
+}
+
 interface ControlsProps {
   state: RecorderState
   canSubmit: boolean
@@ -238,12 +269,20 @@ export function Recorder({ onComplete, onDiscard }: RecorderProps) {
     setErrorMsg(null)
 
     const mimeType = mimeTypeRef.current || "audio/webm"
-    const ext = resolveFileExtension(mimeType)
-    const blob = new Blob(chunksRef.current, { type: mimeType })
+    let blob = new Blob(chunksRef.current, { type: mimeType })
 
+    try {
+      blob = await compressIfNeeded(blob, mimeType)
+    } catch {
+      setErrorMsg("Could not compress recording — please try a shorter clip")
+      setRecorderState("review")
+      return
+    }
+
+    const ext = resolveFileExtension(blob.type)
     const formData = new FormData()
     formData.append("file", blob, `recording.${ext}`)
-    formData.append("mimeType", mimeType)
+    formData.append("mimeType", blob.type)
     formData.append("durationSec", String(duration))
     formData.append("language", language)
     formData.append("intensity", intensity)
