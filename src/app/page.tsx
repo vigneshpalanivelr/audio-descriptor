@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { APP_CONFIG } from "@/config/app"
+import { createClient } from "@/lib/supabase/server"
 
 const TIERS = [
   {
@@ -59,18 +60,41 @@ const FAQS = [
   },
 ] as const
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  const { data: profile } = user
+    ? await supabase.from("profiles").select("display_name").eq("id", user.id).single()
+    : { data: null }
+
+  const displayName = (profile?.display_name as string | null) ?? user?.email?.split("@")[0] ?? null
+
   return (
     <div className="flex flex-col min-h-full font-sans">
       {/* Nav */}
       <nav className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-background/80 backdrop-blur border-b border-foreground/10">
         <span className="font-bold text-lg tracking-tight">{APP_CONFIG.name}</span>
-        <Link
-          href="/auth/sign-in"
-          className="rounded-full bg-foreground text-background px-5 py-2 text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          Sign in
-        </Link>
+        {user ? (
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-foreground/60 hidden sm:block">{displayName}</span>
+            <Link
+              href="/notes"
+              className="rounded-full bg-foreground text-background px-5 py-2 text-sm font-medium hover:opacity-90 transition-opacity"
+            >
+              Open notes
+            </Link>
+          </div>
+        ) : (
+          <Link
+            href="/auth/sign-in"
+            className="rounded-full bg-foreground text-background px-5 py-2 text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            Sign in
+          </Link>
+        )}
       </nav>
 
       {/* Hero */}

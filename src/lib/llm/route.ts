@@ -49,7 +49,21 @@ function selectOpenAIModel(tier: UserTier, outputLanguage: string): string {
   return "gpt-4o-mini"
 }
 
-function buildPrompt(intensity: NoteIntensity, transcript: string, outputLanguage: string): string {
+function buildCustomPrompt(
+  transcript: string,
+  customPrompt: string,
+  outputLanguage: string,
+): string {
+  return `${customPrompt}\n\nTranscript (language: ${outputLanguage}):\n${transcript}`
+}
+
+function buildPrompt(
+  intensity: NoteIntensity,
+  transcript: string,
+  outputLanguage: string,
+  customPrompt?: string,
+): string {
+  if (customPrompt) return buildCustomPrompt(transcript, customPrompt, outputLanguage)
   switch (intensity) {
     case "verbatim":
       return buildVerbatimPrompt(transcript, outputLanguage)
@@ -71,10 +85,11 @@ async function runCleanupWithAnthropic(
   intensity: NoteIntensity,
   outputLanguage: string,
   tier: UserTier,
+  customPrompt?: string,
 ): Promise<CleanupResult> {
   const anthropic = new Anthropic({ apiKey: process.env["ANTHROPIC_API_KEY"] })
   const model = selectAnthropicModel(tier, outputLanguage)
-  const prompt = buildPrompt(intensity, transcript, outputLanguage)
+  const prompt = buildPrompt(intensity, transcript, outputLanguage, customPrompt)
 
   const response = await anthropic.messages.create({
     model,
@@ -97,10 +112,11 @@ async function runCleanupWithOpenAI(
   intensity: NoteIntensity,
   outputLanguage: string,
   tier: UserTier,
+  customPrompt?: string,
 ): Promise<CleanupResult> {
   const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] })
   const model = selectOpenAIModel(tier, outputLanguage)
-  const prompt = buildPrompt(intensity, transcript, outputLanguage)
+  const prompt = buildPrompt(intensity, transcript, outputLanguage, customPrompt)
 
   const response = await openai.chat.completions.create({
     model,
@@ -123,11 +139,12 @@ async function runCleanupWithGemini(
   transcript: string,
   intensity: NoteIntensity,
   outputLanguage: string,
+  customPrompt?: string,
 ): Promise<CleanupResult> {
   /* c8 ignore next */
   const genAI = new GoogleGenerativeAI(process.env["GOOGLE_GEMINI_API_KEY"] ?? "")
   const model = genAI.getGenerativeModel({ model: GEMINI_LLM_MODEL })
-  const prompt = buildPrompt(intensity, transcript, outputLanguage)
+  const prompt = buildPrompt(intensity, transcript, outputLanguage, customPrompt)
 
   const result = await model.generateContent(prompt)
   return { summary: result.response.text().trim(), model: `gemini:${GEMINI_LLM_MODEL}`, costUsd: 0 }
@@ -174,13 +191,14 @@ export async function runCleanup(
   intensity: NoteIntensity,
   outputLanguage: string,
   tier: UserTier,
+  customPrompt?: string,
 ): Promise<CleanupResult> {
   const provider = selectProvider()
   if (provider === "anthropic")
-    return runCleanupWithAnthropic(transcript, intensity, outputLanguage, tier)
+    return runCleanupWithAnthropic(transcript, intensity, outputLanguage, tier, customPrompt)
   if (provider === "openai")
-    return runCleanupWithOpenAI(transcript, intensity, outputLanguage, tier)
-  return runCleanupWithGemini(transcript, intensity, outputLanguage)
+    return runCleanupWithOpenAI(transcript, intensity, outputLanguage, tier, customPrompt)
+  return runCleanupWithGemini(transcript, intensity, outputLanguage, customPrompt)
 }
 
 export async function generateTitle(content: string, language: string): Promise<string> {

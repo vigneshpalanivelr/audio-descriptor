@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
+import type { NoteVersionIntensity } from "@/types"
 
 type NoteStatus = "pending" | "transcribing" | "cleaning" | "ready" | "failed"
 type NoteIntensity = "verbatim" | "light" | "full"
@@ -14,8 +15,18 @@ interface Note {
   summary: string | null
   status: NoteStatus
   intensity: NoteIntensity | null
+  custom_prompt: string | null
   error: string | null
   audio_duration_sec: number | null
+  created_at: string
+}
+
+interface NoteVersion {
+  id: string
+  intensity: NoteVersionIntensity | null
+  custom_prompt: string | null
+  summary: string
+  llm_model: string | null
   created_at: string
 }
 
@@ -33,6 +44,13 @@ const INTENSITY_LABELS = new Map<NoteIntensity, string>([
   ["full", "Full rewrite"],
 ])
 
+function versionLabel(v: NoteVersion): string {
+  if (v.custom_prompt) return "Custom prompt"
+  if (v.intensity && v.intensity !== "custom")
+    return INTENSITY_LABELS.get(v.intensity as NoteIntensity) ?? v.intensity
+  return "Unknown"
+}
+
 export function NoteDetailClient({ noteId }: { noteId: string }) {
   const router = useRouter()
   const [note, setNote] = useState<Note | null>(null)
@@ -42,6 +60,10 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
   const [notFound, setNotFound] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
   const [regenError, setRegenError] = useState<string | null>(null)
+  const [customPrompt, setCustomPrompt] = useState("")
+  const [showCustomPrompt, setShowCustomPrompt] = useState(false)
+  const [versions, setVersions] = useState<NoteVersion[]>([])
+  const [showHistory, setShowHistory] = useState(false)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const supabase = createClient()
 
@@ -50,7 +72,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
       const { data, error } = await supabase
         .from("notes")
         .select(
-          "id, title, transcript_raw, summary, status, intensity, error, audio_duration_sec, created_at",
+          "id, title, transcript_raw, summary, status, intensity, custom_prompt, error, audio_duration_sec, created_at",
         )
         .eq("id", noteId)
         .single()
@@ -65,9 +87,19 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
       if (!titleDirty) setTitle(fetched.title ?? "")
     }
 
-    void fetchNote()
+    async function fetchVersions() {
+      const { data } = await supabase
+        .from("note_versions")
+        .select("id, intensity, custom_prompt, summary, llm_model, created_at")
+        .eq("note_id", noteId)
+        .order("created_at", { ascending: false })
+        .limit(20)
+      setVersions((data ?? []) as NoteVersion[])
+    }
 
-    // Realtime subscription for live status updates
+    void fetchNote()
+    void fetchVersions()
+
     const channel = supabase
       .channel(`note-${noteId}`)
       .on(
@@ -77,6 +109,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
           const updated = payload.new as Note
           setNote(updated)
           if (!titleDirty) setTitle(updated.title ?? "")
+          void fetchVersions()
         },
       )
       .subscribe()
@@ -124,6 +157,31 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
     }
   }
 
+  async function handleCustomRegenerate() {
+    const prompt = customPrompt.trim()
+    if (!prompt) return
+    setRegenerating(true)
+    setRegenError(null)
+    try {
+      const res = await fetch(`/api/notes/${noteId}/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intensity: "light", customPrompt: prompt }),
+      })
+      if (!res.ok) {
+        const body = (await res.json()) as { message?: string }
+        setRegenError(body.message ?? "Regeneration failed")
+      } else {
+        setCustomPrompt("")
+        setShowCustomPrompt(false)
+      }
+    } catch {
+      setRegenError("Network error — please try again")
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
@@ -156,6 +214,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
   }
 
   const isProcessing = note.status !== "ready" && note.status !== "failed"
+  const activeIntensity = note.custom_prompt ? null : note.intensity
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto w-full py-8 px-4">
@@ -222,6 +281,11 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
               <section className="flex flex-col gap-2">
                 <h2 className="text-xs font-semibold uppercase tracking-widest text-foreground/40">
                   Summary
+                  {note.custom_prompt && (
+                    <span className="ml-2 font-normal normal-case tracking-normal text-foreground/30">
+                      — custom prompt
+                    </span>
+                  )}
                 </h2>
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{note.summary}</p>
               </section>
@@ -229,7 +293,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
           </div>
 
           {/* Regenerate controls */}
-          <div className="flex flex-col gap-2 pt-2 border-t border-foreground/10">
+          <div className="flex flex-col gap-3 pt-2 border-t border-foreground/10">
             <p className="text-xs text-foreground/40">Regenerate with different intensity:</p>
             <div className="flex gap-2 flex-wrap">
               {(["verbatim", "light", "full"] as NoteIntensity[]).map((intensity) => (
@@ -238,23 +302,99 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
                   onClick={() => void handleRegenerate(intensity)}
                   disabled={regenerating}
                   className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 ${
-                    note.intensity === intensity
+                    activeIntensity === intensity
                       ? "border-foreground/40 bg-foreground/10 text-foreground"
                       : "border-foreground/20 text-foreground/60 hover:border-foreground/40 hover:text-foreground"
                   }`}
                 >
                   {INTENSITY_LABELS.get(intensity)}
-                  {note.intensity === intensity && " ✓"}
+                  {activeIntensity === intensity && " ✓"}
                 </button>
               ))}
+              <button
+                onClick={() => setShowCustomPrompt((v) => !v)}
+                disabled={regenerating}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 ${
+                  showCustomPrompt || note.custom_prompt
+                    ? "border-foreground/40 bg-foreground/10 text-foreground"
+                    : "border-foreground/20 text-foreground/60 hover:border-foreground/40 hover:text-foreground"
+                }`}
+              >
+                Custom prompt{note.custom_prompt && !showCustomPrompt ? " ✓" : ""}
+              </button>
               {regenerating && (
                 <span className="text-xs text-foreground/40 animate-pulse self-center">
                   Regenerating…
                 </span>
               )}
             </div>
+
+            {/* Custom prompt textarea */}
+            {showCustomPrompt && (
+              <div className="flex flex-col gap-2">
+                {note.custom_prompt && (
+                  <p className="text-xs text-foreground/40 italic">
+                    Last prompt: {note.custom_prompt}
+                  </p>
+                )}
+                <textarea
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value)}
+                  placeholder="e.g. Summarise as bullet points for a developer audience, keep technical terms exact."
+                  rows={3}
+                  className="text-sm bg-foreground/5 border border-foreground/15 rounded-lg px-3 py-2 resize-none outline-none focus:border-foreground/30 transition-colors w-full"
+                />
+                <button
+                  onClick={() => void handleCustomRegenerate()}
+                  disabled={regenerating || !customPrompt.trim()}
+                  className="self-start text-xs px-4 py-1.5 rounded-full bg-foreground text-background font-medium hover:opacity-80 transition-opacity disabled:opacity-40"
+                >
+                  Run with this prompt
+                </button>
+              </div>
+            )}
+
             {regenError && <p className="text-xs text-red-500">{regenError}</p>}
           </div>
+
+          {/* Version history */}
+          {versions.length > 0 && (
+            <div className="flex flex-col gap-2 pt-2 border-t border-foreground/10">
+              <button
+                onClick={() => setShowHistory((v) => !v)}
+                className="flex items-center gap-1 text-xs text-foreground/40 hover:text-foreground/70 transition-colors self-start"
+              >
+                <span>{showHistory ? "▾" : "▸"}</span>
+                {versions.length} previous version{versions.length !== 1 ? "s" : ""}
+              </button>
+
+              {showHistory && (
+                <ul className="flex flex-col gap-3 mt-1">
+                  {versions.map((v) => (
+                    <li
+                      key={v.id}
+                      className="flex flex-col gap-1 rounded-lg border border-foreground/10 bg-foreground/[0.02] p-3"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-foreground/60">
+                          {versionLabel(v)}
+                        </span>
+                        <span className="text-xs text-foreground/30">
+                          {new Date(v.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                      {v.custom_prompt && (
+                        <p className="text-xs text-foreground/40 italic">{v.custom_prompt}</p>
+                      )}
+                      <p className="text-xs leading-relaxed whitespace-pre-wrap text-foreground/60 line-clamp-4">
+                        {v.summary}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       )}
 

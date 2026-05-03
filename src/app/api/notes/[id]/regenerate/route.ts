@@ -11,7 +11,8 @@ import { recordAuditEvent } from "@/lib/logger/audit"
 import type { UserTier } from "@/types"
 
 const regenerateSchema = z.object({
-  intensity: z.enum(["verbatim", "light", "full"]),
+  intensity: z.enum(["verbatim", "light", "full"]).default("light"),
+  customPrompt: z.string().max(2000).optional(),
 })
 
 async function getDailySpendUsd(): Promise<number> {
@@ -41,14 +42,15 @@ export async function POST(request: NextRequest, { params }: RouteParams): Promi
     if (!user) return API_ERRORS.unauthorized()
 
     const body = await request.json()
-    const { intensity } = regenerateSchema.parse(body)
+    const { intensity, customPrompt } = regenerateSchema.parse(body)
 
     const serviceClient = createServiceClient()
 
-    // Fetch the note — RLS guarantees ownership, service client lets admin ops bypass if needed
     const { data: note, error: fetchErr } = await serviceClient
       .from("notes")
-      .select("id, transcript_raw, language_output, status, user_id")
+      .select(
+        "id, transcript_raw, language_output, status, user_id, summary, llm_model, intensity, cost_usd",
+      )
       .eq("id", noteId)
       .eq("user_id", user.id)
       .single()
@@ -63,14 +65,12 @@ export async function POST(request: NextRequest, { params }: RouteParams): Promi
       return API_ERRORS.invalidInput({ transcript: ["Note has no transcript to regenerate from"] })
     }
 
-    // Cost cap pre-flight
     const dailySpend = await getDailySpendUsd()
     if (isCostCapExceeded(dailySpend, parseCostCap())) {
       appLogger.warn({ noteId, dailySpend }, "regenerate:daily_cost_cap_exceeded")
       return API_ERRORS.serviceUnavailable("Daily processing limit reached — try again tomorrow")
     }
 
-    // Fetch user tier
     const { data: profile } = await serviceClient
       .from("profiles")
       .select("tier")
@@ -79,13 +79,32 @@ export async function POST(request: NextRequest, { params }: RouteParams): Promi
     const tier = ((profile?.tier as UserTier | undefined) ?? "free") satisfies UserTier
 
     const language = (note.language_output as string | null) ?? "en"
-    const result = await runCleanup(transcript, intensity, language, tier)
+    const result = await runCleanup(transcript, intensity, language, tier, customPrompt)
 
+    // Save the current version to history before overwriting
+    const currentSummary = note.summary as string | null
+    if (currentSummary) {
+      const versionIntensity = customPrompt
+        ? "custom"
+        : ((note.intensity as string | null) ?? intensity)
+      await serviceClient.from("note_versions").insert({
+        note_id: noteId,
+        user_id: user.id,
+        intensity: versionIntensity,
+        ...(customPrompt ? { custom_prompt: customPrompt } : {}),
+        summary: currentSummary,
+        llm_model: (note.llm_model as string | null) ?? null,
+        cost_usd: (note.cost_usd as number | null) ?? null,
+      })
+    }
+
+    const newIntensity = customPrompt ? null : intensity
     await serviceClient
       .from("notes")
       .update({
         summary: result.summary,
-        intensity,
+        intensity: newIntensity,
+        ...(customPrompt ? { custom_prompt: customPrompt } : { custom_prompt: null }),
         llm_model: result.model,
         cost_usd: result.costUsd,
       })
@@ -95,7 +114,7 @@ export async function POST(request: NextRequest, { params }: RouteParams): Promi
       userId: user.id,
       resourceType: "note",
       resourceId: noteId,
-      metadata: { intensity, model: result.model },
+      metadata: { intensity: customPrompt ? "custom" : intensity, model: result.model },
     })
 
     return Response.json({ summary: result.summary, model: result.model })

@@ -525,3 +525,75 @@ describe("generateTitle — no provider configured", () => {
     expect(await generateTitle("content", "en")).toBe("Untitled")
   })
 })
+
+// ─── Custom prompt ───────────────────────────────────────────────────────────
+
+describe("runCleanup — custom prompt (Anthropic)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("LLM_PROVIDER", "anthropic")
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test")
+    vi.stubEnv("OPENAI_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
+    anthropicCreateMock.mockResolvedValue(
+      makeAnthropicResponse("custom result", "claude-haiku-4-5-20251001"),
+    )
+  })
+
+  it("uses custom prompt instead of preset intensity", async () => {
+    const { runCleanup } = await import("@/lib/llm/route")
+    const result = await runCleanup("transcript", "light", "en", "free", "Make it bullet points")
+    expect(result.summary).toBe("custom result")
+    const call = anthropicCreateMock.mock.calls[0] as [{ messages: [{ content: string }] }]
+    expect(call[0].messages[0].content).toContain("Make it bullet points")
+    expect(call[0].messages[0].content).toContain("transcript")
+  })
+
+  it("includes output language in custom prompt", async () => {
+    const { runCleanup } = await import("@/lib/llm/route")
+    await runCleanup("transcript", "full", "hi", "pro", "Summarise concisely")
+    const call = anthropicCreateMock.mock.calls[0] as [{ messages: [{ content: string }] }]
+    expect(call[0].messages[0].content).toContain("hi")
+  })
+})
+
+describe("runCleanup — custom prompt (OpenAI)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("LLM_PROVIDER", "openai")
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+    vi.stubEnv("OPENAI_API_KEY", "sk-oai-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
+    openaiCreateMock.mockResolvedValue(makeOpenAIResponse("oai custom result", "gpt-4o-mini"))
+  })
+
+  it("uses custom prompt instead of preset intensity", async () => {
+    const { runCleanup } = await import("@/lib/llm/route")
+    const result = await runCleanup("transcript", "light", "en", "free", "Use formal tone")
+    expect(result.summary).toBe("oai custom result")
+    const call = openaiCreateMock.mock.calls[0] as [{ messages: [{ content: string }] }]
+    expect(call[0].messages[0].content).toContain("Use formal tone")
+  })
+})
+
+describe("runCleanup — custom prompt (Gemini)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("LLM_PROVIDER", "gemini")
+    vi.stubEnv("ANTHROPIC_API_KEY", "")
+    vi.stubEnv("OPENAI_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "gemini-key")
+    geminiCreateMock.mockResolvedValue(makeGeminiResponse("gemini custom result"))
+  })
+
+  it("uses custom prompt instead of preset intensity", async () => {
+    const { runCleanup } = await import("@/lib/llm/route")
+    const result = await runCleanup("transcript", "light", "en", "free", "Translate to French")
+    expect(result.summary).toBe("gemini custom result")
+    const call = geminiCreateMock.mock.calls[0] as [string]
+    expect(call[0]).toContain("Translate to French")
+  })
+})
