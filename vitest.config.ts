@@ -31,6 +31,7 @@ export default defineConfig({
         "src/lib/stt/openai.ts",
         "src/lib/stt/sarvam.ts",
         "src/lib/stt/elevenlabs.ts",
+        "src/lib/stt/gemini.ts",
         "src/lib/stt/types.ts",
         // Next.js middleware — tested via E2E; auth flow depends on real Supabase
         "src/middleware.ts",

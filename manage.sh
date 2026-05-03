@@ -262,6 +262,17 @@ cmd_start() {
 
   mkdir -p logs
 
+  if [[ "$mode" == "dev" ]]; then
+    if nc -z 127.0.0.1 8288 2>/dev/null; then
+      export INNGEST_DEV=1
+      info "Inngest dev server detected on :8288 → INNGEST_DEV=1"
+    else
+      unset INNGEST_DEV
+      info "Inngest dev server not running — background jobs disabled locally"
+      info "Run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal to enable them"
+    fi
+  fi
+
   if [[ "$mode" == "prod" ]]; then
     if [[ ! -d ".next" ]]; then
       info "No production build found — building first."
