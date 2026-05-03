@@ -4,7 +4,7 @@ import type { TranscribeRequest, TranscribeResult } from "./types"
 const genAI = new GoogleGenerativeAI(process.env["GOOGLE_GEMINI_API_KEY"] ?? "")
 
 export async function transcribeWithGemini(request: TranscribeRequest): Promise<TranscribeResult> {
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
 
   const audioResponse = await fetch(request.audioUrl)
   const audioBuffer = await audioResponse.arrayBuffer()

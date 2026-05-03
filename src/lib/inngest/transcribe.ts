@@ -1,6 +1,16 @@
+import { NonRetriableError } from "inngest"
 import { inngest } from "./client"
 import { createServiceClient } from "@/lib/supabase/service"
 import { routeTranscription } from "@/lib/stt/route"
+
+function isRateLimitError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "status" in err &&
+    (err as { status: unknown }).status === 429
+  )
+}
 
 export const transcribeNote = inngest.createFunction(
   { id: "transcribe-note", retries: 2 },
@@ -20,12 +30,23 @@ export const transcribeNote = inngest.createFunction(
         .createSignedUrl(storagePath, 300)
       if (signErr || !signedData) throw new Error("Could not create signed URL for audio")
 
-      return routeTranscription({
-        audioUrl: signedData.signedUrl,
-        language: language ?? null,
-        noteId,
-        userId,
-      })
+      try {
+        return await routeTranscription({
+          audioUrl: signedData.signedUrl,
+          language: language ?? null,
+          noteId,
+          userId,
+        })
+      } catch (err) {
+        if (isRateLimitError(err)) {
+          await db
+            .from("notes")
+            .update({ status: "failed", error: "STT quota exceeded — please retry later" })
+            .eq("id", noteId)
+          throw new NonRetriableError("STT rate limit hit", { cause: err })
+        }
+        throw err
+      }
     })
 
     await step.run("save-transcript", async () => {
