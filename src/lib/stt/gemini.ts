@@ -3,8 +3,11 @@ import type { TranscribeRequest, TranscribeResult } from "./types"
 
 const genAI = new GoogleGenerativeAI(process.env["GOOGLE_GEMINI_API_KEY"] ?? "")
 
+// Override via GEMINI_STT_MODEL in .env.local if the default is unavailable on your key
+const STT_MODEL = process.env["GEMINI_STT_MODEL"] ?? "gemini-2.5-flash"
+
 export async function transcribeWithGemini(request: TranscribeRequest): Promise<TranscribeResult> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
+  const model = genAI.getGenerativeModel({ model: STT_MODEL })
 
   const audioResponse = await fetch(request.audioUrl)
   const audioBuffer = await audioResponse.arrayBuffer()
@@ -24,7 +27,7 @@ export async function transcribeWithGemini(request: TranscribeRequest): Promise<
     transcript: result.response.text().trim(),
     detectedLanguage: request.language ?? "en",
     durationSeconds: 0,
-    engine: "gemini",
+    engine: `gemini:${STT_MODEL}`,
     costUsd: 0,
   }
 }

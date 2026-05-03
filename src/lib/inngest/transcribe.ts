@@ -3,13 +3,18 @@ import { inngest } from "./client"
 import { createServiceClient } from "@/lib/supabase/service"
 import { routeTranscription } from "@/lib/stt/route"
 
-function isRateLimitError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "status" in err &&
-    (err as { status: unknown }).status === 429
-  )
+function isNonRetriableHttpError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null || !("status" in err)) return false
+  const status = (err as { status: unknown }).status
+  // 429 = quota exceeded, 404 = model/resource not found — retrying won't help
+  return status === 429 || status === 404
+}
+
+function humanErrorMessage(err: unknown): string {
+  const status = (err as { status?: unknown }).status
+  if (status === 429) return "STT quota exceeded — please retry later"
+  if (status === 404) return "STT model not found — check GEMINI_STT_MODEL in .env.local"
+  return "STT request failed"
 }
 
 export const transcribeNote = inngest.createFunction(
@@ -38,12 +43,12 @@ export const transcribeNote = inngest.createFunction(
           userId,
         })
       } catch (err) {
-        if (isRateLimitError(err)) {
+        if (isNonRetriableHttpError(err)) {
           await db
             .from("notes")
-            .update({ status: "failed", error: "STT quota exceeded — please retry later" })
+            .update({ status: "failed", error: humanErrorMessage(err) })
             .eq("id", noteId)
-          throw new NonRetriableError("STT rate limit hit", { cause: err })
+          throw new NonRetriableError(humanErrorMessage(err), { cause: err })
         }
         throw err
       }
