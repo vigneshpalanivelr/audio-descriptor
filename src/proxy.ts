@@ -4,7 +4,7 @@ import { checkRateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/securit
 
 const PROTECTED_PATHS = ["/notes", "/settings"]
 const AUTH_PATHS = ["/auth/sign-in"]
-const SUPABASE_TIMEOUT_MS = 3000
+const SUPABASE_TIMEOUT_MS = 1000
 
 function tooManyRequests(resetAt: number): NextResponse {
   return new NextResponse("Too Many Requests", {
@@ -39,6 +39,7 @@ function buildSupabaseProxyClient(request: NextRequest, response: NextResponse) 
     process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
     process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"]!,
     {
+      auth: { retryAttempts: 0 },
       cookies: {
         getAll: () => request.cookies.getAll(),
         setAll: (cookiesToSet: Array<{ name: string; value: string; options: CookieOptions }>) => {

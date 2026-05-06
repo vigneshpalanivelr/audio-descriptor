@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
-const AUTH_TIMEOUT_MS = 2000
+const AUTH_TIMEOUT_MS = 1000
 
 export async function safeGetUser(
   supabase: SupabaseClient,
