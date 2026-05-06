@@ -12,6 +12,7 @@ import { API_ERRORS, handleRouteError } from "@/lib/api/error"
 import { inngest } from "@/lib/inngest/client"
 import { appLogger } from "@/lib/logger"
 import { parseCostCap, isCostCapExceeded } from "@/lib/cost/cap"
+import { processNoteDirectly } from "@/lib/note-processor"
 import type { UserTier } from "@/types"
 
 const uploadMetaSchema = z.object({
@@ -34,16 +35,24 @@ interface InngestPayload {
   tier: string
 }
 
-async function sendToInngest(payload: InngestPayload): Promise<void> {
+async function sendToInngest(payload: InngestPayload): Promise<boolean> {
   if (!process.env["INNGEST_EVENT_KEY"]) {
     appLogger.debug({ noteId: payload.noteId }, "upload:inngest_skipped_no_key")
-    return
+    return false
   }
   try {
     await inngest.send({ name: "audio/note.uploaded", data: payload })
+    return true
   } catch (err) {
     appLogger.warn({ err, noteId: payload.noteId }, "upload:inngest_send_failed")
+    return false
   }
+}
+
+function runDirectProcessing(payload: InngestPayload): void {
+  processNoteDirectly(payload).catch((err) =>
+    appLogger.error({ err, noteId: payload.noteId }, "upload:direct_process_failed"),
+  )
 }
 
 function currentMonth(): string {
@@ -161,7 +170,7 @@ export async function POST(request: NextRequest) {
 
     await serviceClient.from("notes").update({ audio_storage_path: storagePath }).eq("id", note.id)
 
-    await sendToInngest({
+    const inngestPayload = {
       noteId: note.id as string,
       userId: user.id,
       storagePath,
@@ -169,7 +178,11 @@ export async function POST(request: NextRequest) {
       language: meta.language,
       intensity: meta.intensity,
       tier,
-    })
+    }
+    const sentToInngest = await sendToInngest(inngestPayload)
+    if (!sentToInngest) {
+      runDirectProcessing(inngestPayload)
+    }
 
     return Response.json({ noteId: note.id }, { status: 201 })
   } catch (err) {
