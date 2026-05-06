@@ -501,8 +501,8 @@ cmd_start() {
       info "Inngest dev server detected on :8288 → INNGEST_DEV=1"
     else
       unset INNGEST_DEV
-      info "Inngest dev server not running — background jobs disabled locally"
-      info "Run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal to enable them"
+      info "Inngest dev server not running — notes will be processed via direct fallback"
+      info "To use Inngest queuing: run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal"
     fi
   fi
 
@@ -561,8 +561,8 @@ cmd_dev() {
     info "Inngest dev server detected on :8288 → INNGEST_DEV=1"
   else
     unset INNGEST_DEV
-    info "Inngest dev server not running — background jobs disabled"
-    info "Run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal to enable them"
+    info "Inngest dev server not running — notes will be processed via direct fallback"
+    info "To use Inngest queuing: run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal"
   fi
 
   header "🚀  ${APP_NAME} dev server — ${BC}${APP_URL}${RST}  (Ctrl-C to stop)"

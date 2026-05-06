@@ -8,7 +8,8 @@ import { recordAuditEvent } from "@/lib/logger/audit"
 
 const patchSchema = z.object({
   summary: z.string().min(1).max(100_000).optional(),
-  title: z.string().max(500).optional(),
+  title: z.string().max(500).nullable().optional(),
+  is_pinned: z.boolean().optional(),
 })
 
 interface RouteParams {
@@ -32,7 +33,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams): Promi
       serviceClient
         .from("notes")
         .select(
-          "id, title, transcript_raw, summary, status, intensity, error, audio_duration_sec, audio_storage_path, created_at, ready_at",
+          "id, title, transcript_raw, summary, status, intensity, error, audio_duration_sec, audio_storage_path, created_at, ready_at, is_pinned",
         )
         .eq("id", noteId)
         .eq("user_id", user.id)
@@ -69,8 +70,9 @@ export async function PATCH(request: NextRequest, { params }: RouteParams): Prom
 
     const body = await request.json()
     const updates = patchSchema.parse(body)
-    if (!updates.summary && !updates.title) {
-      return API_ERRORS.invalidInput({ body: ["At least one of summary or title is required"] })
+    const { summary, title, is_pinned } = updates
+    if (summary === undefined && title === undefined && is_pinned === undefined) {
+      return API_ERRORS.invalidInput({ body: ["At least one field is required"] })
     }
 
     const serviceClient = createServiceClient()

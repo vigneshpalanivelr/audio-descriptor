@@ -15,6 +15,7 @@ interface NoteRow {
   intensity: string | null
   audio_duration_sec: number | null
   created_at: string
+  is_pinned: boolean
 }
 
 const STATUS_BADGE: Record<NoteStatus, { label: string; className: string }> = {
@@ -54,8 +55,9 @@ export default async function NotesPage() {
   const { data: notes } = user
     ? await supabase
         .from("notes")
-        .select("id, title, status, intensity, audio_duration_sec, created_at")
+        .select("id, title, status, intensity, audio_duration_sec, created_at, is_pinned")
         .eq("user_id", user.id)
+        .order("is_pinned", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(50)
     : { data: null }
@@ -107,9 +109,16 @@ export default async function NotesPage() {
                 className="flex items-center justify-between gap-4 rounded-xl border border-foreground/10 bg-foreground/[0.02] hover:bg-foreground/5 p-4 transition-colors"
               >
                 <div className="flex flex-col gap-1 min-w-0">
-                  <span className="font-medium text-sm truncate">
-                    {note.title ?? "Untitled note"}
-                  </span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {note.is_pinned && (
+                      <span className="shrink-0 text-xs" aria-label="Pinned">
+                        📌
+                      </span>
+                    )}
+                    <span className="font-medium text-sm truncate">
+                      {note.title ?? "Untitled note"}
+                    </span>
+                  </div>
                   <span className="text-xs text-foreground/40">
                     {new Date(note.created_at).toLocaleDateString(undefined, {
                       month: "short",

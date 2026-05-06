@@ -22,6 +22,7 @@ interface Note {
   audio_storage_path: string | null
   created_at: string
   ready_at: string | null
+  is_pinned: boolean
 }
 
 interface NoteVersion {
@@ -91,6 +92,7 @@ interface NoteReadyContentProps {
   onCustomPromptChange: (val: string) => void
   onCustomRegenerate: () => void
   onToggleHistory: () => void
+  hasTranscript: boolean
 }
 
 function NoteReadyContent({
@@ -113,6 +115,7 @@ function NoteReadyContent({
   onCustomPromptChange,
   onCustomRegenerate,
   onToggleHistory,
+  hasTranscript,
 }: NoteReadyContentProps) {
   return (
     <div className="flex flex-col gap-5">
@@ -170,62 +173,69 @@ function NoteReadyContent({
         </section>
       </div>
 
-      {/* Regenerate controls */}
-      <div className="flex flex-col gap-3 pt-2 border-t border-foreground/10">
-        <p className="text-xs text-foreground/40">Regenerate with different intensity:</p>
-        <div className="flex gap-2 flex-wrap">
-          {(["verbatim", "light", "full"] as NoteIntensity[]).map((intensity) => (
+      {/* Regenerate controls — only when transcript is available */}
+      {!hasTranscript && (
+        <p className="text-xs text-foreground/40 pt-2 border-t border-foreground/10">
+          No transcript available — regeneration requires audio to have been transcribed.
+        </p>
+      )}
+      {hasTranscript && (
+        <div className="flex flex-col gap-3 pt-2 border-t border-foreground/10">
+          <p className="text-xs text-foreground/40">Regenerate with different intensity:</p>
+          <div className="flex gap-2 flex-wrap">
+            {(["verbatim", "light", "full"] as NoteIntensity[]).map((intensity) => (
+              <button
+                key={intensity}
+                onClick={() => onRegenerate(intensity)}
+                disabled={regenerating}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 ${
+                  note.intensity === intensity
+                    ? "border-foreground/40 bg-foreground/10 text-foreground"
+                    : "border-foreground/20 text-foreground/60 hover:border-foreground/40 hover:text-foreground"
+                }`}
+              >
+                {INTENSITY_LABELS.get(intensity)}
+                {note.intensity === intensity && " ✓"}
+              </button>
+            ))}
             <button
-              key={intensity}
-              onClick={() => onRegenerate(intensity)}
+              onClick={onToggleCustomPrompt}
               disabled={regenerating}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 ${
-                note.intensity === intensity
+                showCustomPrompt
                   ? "border-foreground/40 bg-foreground/10 text-foreground"
                   : "border-foreground/20 text-foreground/60 hover:border-foreground/40 hover:text-foreground"
               }`}
             >
-              {INTENSITY_LABELS.get(intensity)}
-              {note.intensity === intensity && " ✓"}
+              Custom prompt
             </button>
-          ))}
-          <button
-            onClick={onToggleCustomPrompt}
-            disabled={regenerating}
-            className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 ${
-              showCustomPrompt
-                ? "border-foreground/40 bg-foreground/10 text-foreground"
-                : "border-foreground/20 text-foreground/60 hover:border-foreground/40 hover:text-foreground"
-            }`}
-          >
-            Custom prompt
-          </button>
-          {regenerating && (
-            <span className="text-xs text-foreground/40 animate-pulse self-center">
-              Regenerating…
-            </span>
-          )}
-        </div>
-        {showCustomPrompt && (
-          <div className="flex flex-col gap-2">
-            <textarea
-              value={customPrompt}
-              onChange={(e) => onCustomPromptChange(e.target.value)}
-              placeholder='e.g. "Summarise as bullet points for a developer audience."'
-              rows={3}
-              className="text-sm bg-foreground/5 border border-foreground/15 rounded-lg px-3 py-2 resize-none outline-none focus:border-foreground/30 transition-colors w-full"
-            />
-            <button
-              onClick={onCustomRegenerate}
-              disabled={regenerating || !customPrompt.trim()}
-              className="self-start text-xs px-4 py-1.5 rounded-full bg-foreground text-background font-medium hover:opacity-80 transition-opacity disabled:opacity-40"
-            >
-              Run with this prompt
-            </button>
+            {regenerating && (
+              <span className="text-xs text-foreground/40 animate-pulse self-center">
+                Regenerating…
+              </span>
+            )}
           </div>
-        )}
-        {regenError && <p className="text-xs text-red-500">{regenError}</p>}
-      </div>
+          {showCustomPrompt && (
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={customPrompt}
+                onChange={(e) => onCustomPromptChange(e.target.value)}
+                placeholder='e.g. "Summarise as bullet points for a developer audience."'
+                rows={3}
+                className="text-sm bg-foreground/5 border border-foreground/15 rounded-lg px-3 py-2 resize-none outline-none focus:border-foreground/30 transition-colors w-full"
+              />
+              <button
+                onClick={onCustomRegenerate}
+                disabled={regenerating || !customPrompt.trim()}
+                className="self-start text-xs px-4 py-1.5 rounded-full bg-foreground text-background font-medium hover:opacity-80 transition-opacity disabled:opacity-40"
+              >
+                Run with this prompt
+              </button>
+            </div>
+          )}
+          {regenError && <p className="text-xs text-red-500">{regenError}</p>}
+        </div>
+      )}
 
       {/* Version history */}
       {versions.length > 0 && (
@@ -287,6 +297,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
   const [editingSummary, setEditingSummary] = useState(false)
   const [editedSummary, setEditedSummary] = useState("")
   const [savingSummary, setSavingSummary] = useState(false)
+  const [pinning, setPinning] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [audioCountdown, setAudioCountdown] = useState(0)
@@ -359,11 +370,30 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
 
   async function saveTitle(val: string) {
     setSaving(true)
-    await supabase
-      .from("notes")
-      .update({ title: val || null })
-      .eq("id", noteId)
-    setSaving(false)
+    try {
+      await fetch(`/api/notes/${noteId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: val.trim() || null }),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handlePin() {
+    if (!note) return
+    setPinning(true)
+    try {
+      await fetch(`/api/notes/${noteId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_pinned: !note.is_pinned }),
+      })
+      setNote((prev) => (prev ? { ...prev, is_pinned: !prev.is_pinned } : prev))
+    } finally {
+      setPinning(false)
+    }
   }
 
   async function handleSaveSummary() {
@@ -510,6 +540,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
   }
 
   const isProcessing = note.status !== "ready" && note.status !== "failed"
+  const hasTranscript = !!note.transcript_raw
   const hasAudio = !!note.audio_storage_path
   const audioExpired = hasAudio && audioCountdown <= 0 && !!note.ready_at
   const audioAvailable = hasAudio && !audioExpired
@@ -518,14 +549,28 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
     <div className="flex flex-col gap-6 max-w-5xl mx-auto w-full py-8 px-4">
       {/* Title + meta */}
       <div className="flex flex-col gap-1">
-        <input
-          type="text"
-          value={title}
-          onChange={handleTitleChange}
-          placeholder="Untitled note"
-          className="text-2xl font-bold tracking-tight bg-transparent border-0 border-b border-transparent hover:border-foreground/20 focus:border-foreground/40 outline-none transition-colors py-1 w-full"
-          aria-label="Note title"
-        />
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={title}
+            onChange={handleTitleChange}
+            onBlur={() => {
+              if (titleDirty) void saveTitle(title)
+            }}
+            placeholder="Untitled note"
+            className="text-2xl font-bold tracking-tight bg-transparent border-0 border-b border-transparent hover:border-foreground/20 focus:border-foreground/40 outline-none transition-colors py-1 flex-1"
+            aria-label="Note title"
+          />
+          {titleDirty && (
+            <button
+              onClick={() => void saveTitle(title)}
+              disabled={saving}
+              className="shrink-0 text-xs px-3 py-1 rounded-full border border-foreground/20 text-foreground/60 hover:border-foreground/40 hover:text-foreground transition-colors disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2 text-xs text-foreground/30">
           <span>{new Date(note.created_at).toLocaleString()}</span>
           {saving && <span className="animate-pulse">· saving…</span>}
@@ -571,6 +616,18 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
         )}
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => void handlePin()}
+            disabled={pinning}
+            title={note.is_pinned ? "Unpin note" : "Pin note to top"}
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 ${
+              note.is_pinned
+                ? "border-foreground/40 bg-foreground/10 text-foreground"
+                : "border-foreground/20 text-foreground/40 hover:border-foreground/40 hover:text-foreground"
+            }`}
+          >
+            {note.is_pinned ? "📌 Pinned" : "Pin"}
+          </button>
           {confirmDelete ? (
             <>
               <span className="text-xs text-foreground/50">Delete this note?</span>
@@ -635,6 +692,7 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
           onCustomPromptChange={setCustomPrompt}
           onCustomRegenerate={() => void handleCustomRegenerate()}
           onToggleHistory={() => setShowHistory((v) => !v)}
+          hasTranscript={hasTranscript}
         />
       )}
 

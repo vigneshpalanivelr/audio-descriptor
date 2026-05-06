@@ -73,7 +73,7 @@ describe("PATCH /api/notes/[id]", () => {
   })
 
   describe("input validation", () => {
-    it("returns 422 when body has no title or summary", async () => {
+    it("returns 422 when body has no title, summary, or is_pinned", async () => {
       mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } })
       mockServiceUpdate.mockResolvedValue({ error: null })
 
@@ -184,6 +184,45 @@ describe("PATCH /api/notes/[id]", () => {
       await callPatch({ title: "New Title" })
 
       expect(mockRecordAuditEvent).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("null title and is_pinned", () => {
+    it("returns 200 when clearing title with null", async () => {
+      mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } })
+      mockServiceUpdate.mockResolvedValue({ error: null })
+
+      const res = await callPatch({ title: null })
+
+      expect(res.status).toBe(200)
+    })
+
+    it("returns 200 when pinning a note", async () => {
+      mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } })
+      mockServiceUpdate.mockResolvedValue({ error: null })
+
+      const res = await callPatch({ is_pinned: true })
+      const body = await res.json()
+
+      expect(res.status).toBe(200)
+      expect(body).toEqual({ ok: true })
+    })
+
+    it("returns 200 when unpinning a note", async () => {
+      mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } })
+      mockServiceUpdate.mockResolvedValue({ error: null })
+
+      const res = await callPatch({ is_pinned: false })
+
+      expect(res.status).toBe(200)
+    })
+
+    it("returns 422 when is_pinned is not a boolean", async () => {
+      mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } })
+
+      const res = await callPatch({ is_pinned: "yes" })
+
+      expect(res.status).toBe(422)
     })
   })
 })
