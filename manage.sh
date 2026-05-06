@@ -276,11 +276,13 @@ supabase_parse_and_patch() {
 
 supabase_do_start() {
   header "🗄  Starting local Supabase stack"
-  local start_output
-  start_output=$(supabase start 2>&1)
-  echo "$start_output" | colorize_output
+  local tmpfile
+  tmpfile=$(mktemp)
+  # Stream output live AND capture it for key parsing
+  supabase start 2>&1 | tee "$tmpfile" | colorize_output
   echo ""
-  supabase_parse_and_patch "$start_output"
+  supabase_parse_and_patch "$(cat "$tmpfile")"
+  rm -f "$tmpfile"
 }
 
 supabase_do_push() {
@@ -296,7 +298,7 @@ ensure_supabase() {
     return 0
   fi
 
-  if ! docker info >/dev/null 2>&1; then
+  if ! timeout 5 docker info >/dev/null 2>&1; then
     warn "Docker not running — skipping local Supabase setup"
     info "Start Docker Desktop, then run ${BD}./manage.sh db start${RST}"
     return 0
@@ -322,7 +324,7 @@ cmd_db() {
         error "supabase CLI not found. Install: brew install supabase/tap/supabase"
         exit 1
       fi
-      if ! docker info >/dev/null 2>&1; then
+      if ! timeout 5 docker info >/dev/null 2>&1; then
         error "Docker is not running. Start Docker Desktop first."
         exit 1
       fi
@@ -660,7 +662,7 @@ cmd_install() {
     printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
   fi
 
-  if ! docker info >/dev/null 2>&1; then
+  if ! timeout 5 docker info >/dev/null 2>&1; then
     warn "Docker not running — Supabase local stack requires Docker Desktop."
     docker_ok=false
   else
