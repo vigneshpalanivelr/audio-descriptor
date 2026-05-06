@@ -15,6 +15,47 @@ interface RouteParams {
   params: Promise<{ id: string }>
 }
 
+export async function GET(_request: NextRequest, { params }: RouteParams): Promise<Response> {
+  try {
+    const { id } = await params
+    const noteId = uuidSchema.parse(id)
+
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return API_ERRORS.unauthorized()
+
+    const serviceClient = createServiceClient()
+
+    const [noteResult, versionsResult] = await Promise.all([
+      serviceClient
+        .from("notes")
+        .select(
+          "id, title, transcript_raw, summary, status, intensity, error, audio_duration_sec, audio_storage_path, created_at, ready_at",
+        )
+        .eq("id", noteId)
+        .eq("user_id", user.id)
+        .single(),
+      serviceClient
+        .from("note_versions")
+        .select("id, intensity, custom_prompt, summary, llm_model, created_at")
+        .eq("note_id", noteId)
+        .order("created_at", { ascending: false })
+        .limit(20),
+    ])
+
+    if (noteResult.error?.code === "PGRST116" || !noteResult.data) {
+      return API_ERRORS.notFound("Note")
+    }
+    if (noteResult.error) return API_ERRORS.internalError()
+
+    return Response.json({ note: noteResult.data, versions: versionsResult.data ?? [] })
+  } catch (err) {
+    return handleRouteError(err, "api/notes/[id] GET")
+  }
+}
+
 export async function PATCH(request: NextRequest, { params }: RouteParams): Promise<Response> {
   try {
     const { id } = await params

@@ -296,54 +296,35 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
 
   useEffect(() => {
     async function fetchNote() {
-      const { data, error } = await supabase
-        .from("notes")
-        .select(
-          "id, title, transcript_raw, summary, status, intensity, error, audio_duration_sec, audio_storage_path, created_at, ready_at",
-        )
-        .eq("id", noteId)
-        .single()
-
-      if (error) {
-        if (error.code === "PGRST116") setNotFound(true)
-        else setFetchError(error.message)
-        return
-      }
-      if (!data) {
+      const res = await fetch(`/api/notes/${noteId}`)
+      if (res.status === 404) {
         setNotFound(true)
         return
       }
-
-      const fetched = data as Note
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string }
+        setFetchError(body.message ?? `Error ${res.status}`)
+        return
+      }
+      const { note: fetched, versions: fetchedVersions } = (await res.json()) as {
+        note: Note
+        versions: NoteVersion[]
+      }
       setNote(fetched)
+      setVersions(fetchedVersions)
       setAudioCountdown(audioTimeRemaining(fetched.ready_at))
       if (!titleDirty) setTitle(fetched.title ?? "")
     }
 
-    async function fetchVersions() {
-      const { data } = await supabase
-        .from("note_versions")
-        .select("id, intensity, custom_prompt, summary, llm_model, created_at")
-        .eq("note_id", noteId)
-        .order("created_at", { ascending: false })
-        .limit(20)
-      setVersions((data ?? []) as NoteVersion[])
-    }
-
     void fetchNote()
-    void fetchVersions()
 
     const channel = supabase
       .channel(`note-${noteId}`)
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "notes", filter: `id=eq.${noteId}` },
-        (payload) => {
-          const updated = payload.new as Note
-          setNote(updated)
-          setAudioCountdown(audioTimeRemaining(updated.ready_at))
-          if (!titleDirty) setTitle(updated.title ?? "")
-          void fetchVersions()
+        () => {
+          void fetchNote()
         },
       )
       .subscribe()
