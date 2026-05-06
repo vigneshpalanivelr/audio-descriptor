@@ -170,6 +170,74 @@ flag_color() {
   fi
 }
 
+# ─── Platform / dependency helpers ───────────────────────────────────────────
+
+is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+
+# Ensure Docker daemon is running; install Docker Desktop on macOS if missing.
+ensure_docker_running() {
+  if timeout 5 docker info >/dev/null 2>&1; then
+    printf "  ${DIM}  %-18s${RST} %b\n" "Docker" "${BG}running${RST}"
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    if is_macos && command -v brew >/dev/null 2>&1; then
+      info "Docker Desktop not found — installing via Homebrew (this may take a few minutes)…"
+      brew install --cask docker
+    elif is_macos; then
+      error "Docker Desktop is not installed and Homebrew is not available."
+      info "Install Homebrew first: https://brew.sh  then re-run ./manage.sh install"
+      return 1
+    else
+      error "Docker Desktop is not installed."
+      info "Install Docker Desktop: https://www.docker.com/products/docker-desktop/"
+      return 1
+    fi
+  fi
+
+  if is_macos; then
+    info "Starting Docker Desktop…"
+    open -a Docker 2>/dev/null || true
+    local elapsed=0
+    spin_start "Waiting for Docker daemon (up to 90 s)"
+    while ! docker info >/dev/null 2>&1; do
+      if [[ $elapsed -ge 90 ]]; then
+        spin_stop "fail"
+        error "Docker did not start within 90 s."
+        info "Open Docker Desktop manually, wait for the whale icon to stop animating, then re-run."
+        return 1
+      fi
+      sleep 3
+      elapsed=$((elapsed + 3))
+    done
+    spin_stop "ok"
+  else
+    error "Docker daemon is not running. Start it and retry."
+    return 1
+  fi
+}
+
+# Ensure Supabase CLI is installed; auto-install via Homebrew / Scoop if possible.
+ensure_supabase_cli() {
+  if command -v supabase >/dev/null 2>&1; then
+    printf "  ${DIM}  %-18s${RST} %b\n" "Supabase CLI" "${BG}$(supabase --version 2>/dev/null | head -1)${RST}"
+    return 0
+  fi
+  if is_macos && command -v brew >/dev/null 2>&1; then
+    info "Supabase CLI not found — installing via Homebrew…"
+    brew install supabase/tap/supabase
+  elif command -v scoop >/dev/null 2>&1; then
+    info "Supabase CLI not found — installing via Scoop…"
+    scoop install supabase
+  else
+    error "Supabase CLI not found and no package manager available."
+    info "Install: brew install supabase/tap/supabase"
+    info "Or visit: https://supabase.com/docs/guides/cli"
+    return 1
+  fi
+}
+
 # ─── Config (redacted) ────────────────────────────────────────────────────────
 show_config() {
   load_env
@@ -289,20 +357,12 @@ supabase_do_push() {
   run_cmd "Apply pending DB migrations" supabase db push
 }
 
-# Idempotent: called automatically by `start`.
-# Starts Supabase if not running, always applies any pending migrations.
+# Idempotent: auto-installs CLI + Docker if needed, then starts Supabase and
+# applies pending migrations. Soft-fails with a warning when automation is not
+# possible (e.g. non-macOS without package manager) so dev/start still proceed.
 ensure_supabase() {
-  if ! command -v supabase >/dev/null 2>&1; then
-    warn "supabase CLI not found — skipping local DB setup"
-    info "Install: brew install supabase/tap/supabase  •  scoop install supabase  •  https://supabase.com/docs/guides/cli"
-    return 0
-  fi
-
-  if ! timeout 5 docker info >/dev/null 2>&1; then
-    warn "Docker not running — skipping local Supabase setup"
-    info "Start Docker Desktop, then run ${BD}./manage.sh db start${RST}"
-    return 0
-  fi
+  ensure_supabase_cli || { warn "Supabase CLI unavailable — skipping local DB setup"; return 0; }
+  ensure_docker_running || { warn "Docker unavailable — skipping local DB setup"; return 0; }
 
   if supabase_is_running; then
     info "Supabase stack already running on :${SUPABASE_API_PORT}"
@@ -661,104 +721,62 @@ cmd_test() {
 cmd_install() {
   header "📦  Installing ${APP_NAME}"
 
-  # ── 1. Prerequisites check ──────────────────────────────────────────────────
+  # ── 1. Node.js + pnpm (must be pre-installed) ───────────────────────────────
   echo ""
   echo "  ${BD}Checking prerequisites${RST}"
 
-  local node_ok=true pnpm_ok=true docker_ok=true
   local node_ver pnpm_ver
-
   node_ver=$(node -v 2>/dev/null || echo "")
   if [[ -z "$node_ver" ]]; then
-    error "Node.js not found. Install Node 22 via nvm: nvm install 22 && nvm use 22"
-    node_ok=false
-  else
-    printf "  ${DIM}  %-18s${RST} %b\n" "Node.js" "${BG}${node_ver}${RST}"
+    error "Node.js not found. Install Node 22: nvm install 22 && nvm use 22"
+    exit 1
   fi
+  printf "  ${DIM}  %-18s${RST} %b\n" "Node.js" "${BG}${node_ver}${RST}"
 
   pnpm_ver=$(pnpm -v 2>/dev/null || echo "")
   if [[ -z "$pnpm_ver" ]]; then
     error "pnpm not found. Install: npm i -g pnpm"
-    pnpm_ok=false
-  else
-    printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
-  fi
-
-  if ! timeout 5 docker info >/dev/null 2>&1; then
-    warn "Docker not running — Supabase local stack requires Docker Desktop."
-    docker_ok=false
-  else
-    printf "  ${DIM}  %-18s${RST} %b\n" "Docker" "${BG}running${RST}"
-  fi
-
-  if [[ "$node_ok" == "false" || "$pnpm_ok" == "false" ]]; then
-    echo ""
-    error "Install missing prerequisites above, then re-run ./manage.sh install"
     exit 1
   fi
+  printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
 
-  # ── 2. pnpm install ─────────────────────────────────────────────────────────
+  # ── 2. Docker — auto-install + start ────────────────────────────────────────
+  echo ""
+  echo "  ${BD}Docker${RST}"
+  ensure_docker_running || exit 1
+
+  # ── 3. Supabase CLI — auto-install ──────────────────────────────────────────
+  echo ""
+  echo "  ${BD}Supabase CLI${RST}"
+  ensure_supabase_cli || exit 1
+
+  # ── 4. Node dependencies ────────────────────────────────────────────────────
   run_cmd "Install Node dependencies" pnpm install
 
-  # ── 3. .env.local ───────────────────────────────────────────────────────────
+  # ── 5. .env.local ───────────────────────────────────────────────────────────
   echo ""
   if [[ ! -f ".env.local" ]]; then
     cp .env.example .env.local
     success "Created ${BD}.env.local${RST} from .env.example"
-    warn "Edit ${BD}.env.local${RST} and fill in your keys before starting the server."
   else
     info ".env.local already exists — skipping copy."
   fi
 
-  # ── 4. Supabase ─────────────────────────────────────────────────────────────
-  echo ""
-  if [[ "$docker_ok" == "true" ]] && command -v supabase >/dev/null 2>&1; then
-    echo "  ${BD}Local Supabase${RST}"
-    echo "  ${DIM}  supabase start  — launches Postgres, Auth, Storage, and Studio containers${RST}"
-    echo "  ${DIM}  supabase db push — applies all migrations from supabase/migrations/ to the local DB${RST}"
-    echo ""
-    # Start the local Supabase stack (idempotent: safe to re-run if already running)
-    run_cmd "Start local Supabase stack" supabase start
-    # Apply (or re-apply) all SQL migrations in supabase/migrations/
-    run_cmd "Apply database migrations" supabase db push
-    echo ""
-    info "Supabase is running. Copy the keys printed above into ${BD}.env.local${RST}:"
-    echo ""
-    echo "  ${DIM}  # From the 'APIs' section of supabase start output:${RST}"
-    printf "  ${DIM}  %-44s${RST}  ${DIM}# Project URL${RST}\n" "NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321"
-    echo ""
-    echo "  ${DIM}  # From the 'Authentication Keys' section of supabase start output:${RST}"
-    printf "  ${DIM}  %-44s${RST}  ${DIM}# 'Publishable' key${RST}\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY=<Publishable key>"
-    printf "  ${DIM}  %-44s${RST}  ${DIM}# 'Secret' key${RST}\n"     "SUPABASE_SERVICE_ROLE_KEY=<Secret key>"
-  else
-    warn "supabase CLI not found or Docker not running."
-    echo "  ${DIM}  Install: brew install supabase/tap/supabase  (Mac)${RST}"
-    echo "  ${DIM}         or: https://supabase.com/docs/guides/cli${RST}"
-    echo ""
-    echo "  Once installed, run these commands manually:"
-    echo ""
-    echo "  ${DIM}  \$ supabase start     ${RST}  ${DIM}# launches Postgres + Auth + Storage containers, prints local keys${RST}"
-    echo "  ${DIM}  \$ supabase db push   ${RST}  ${DIM}# applies migrations from supabase/migrations/ to the local DB${RST}"
-    echo ""
-    echo "  Then add the printed keys to ${BD}.env.local${RST}:"
-    echo ""
-    echo "  ${DIM}  NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321${RST}   ${DIM}# Project URL${RST}"
-    echo "  ${DIM}  NEXT_PUBLIC_SUPABASE_ANON_KEY=<Publishable key>  ${RST}  ${DIM}# Authentication Keys → Publishable${RST}"
-    echo "  ${DIM}  SUPABASE_SERVICE_ROLE_KEY=<Secret key>           ${RST}  ${DIM}# Authentication Keys → Secret${RST}"
-  fi
+  # ── 6. Supabase start + migrations (fully automatic) ────────────────────────
+  ensure_supabase
 
-  # ── 5. Summary ──────────────────────────────────────────────────────────────
+  # ── 7. Summary ──────────────────────────────────────────────────────────────
+  echo ""
+  divider
+  success "${BD}Installation complete!${RST}"
   echo ""
   echo "  ${BD}Next steps${RST}"
-  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ANTHROPIC_API_KEY + Supabase keys from above)"
-  if [[ "$docker_ok" == "false" ]] || ! command -v supabase >/dev/null 2>&1; then
-    echo "  ${DIM}  2.${RST}  Install supabase CLI, then: ${BD}supabase start && supabase db push${RST}"
-    echo "  ${DIM}  3.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
-    echo "  ${DIM}  4.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
-  else
-    echo "  ${DIM}  2.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
-    echo "  ${DIM}  3.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
-  fi
+  echo "  ${DIM}  1.${RST}  Edit ${BD}.env.local${RST} — fill in your API keys:"
+  printf "  ${DIM}     %-38s${RST} %b\n" "ANTHROPIC_API_KEY" "${DIM}(required for LLM)${RST}"
+  printf "  ${DIM}     %-38s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY" "${DIM}(auto-filled above if Supabase started)${RST}"
+  printf "  ${DIM}     %-38s${RST} %b\n" "SUPABASE_SERVICE_ROLE_KEY" "${DIM}(auto-filled above if Supabase started)${RST}"
+  echo "  ${DIM}  2.${RST}  ${BG}pnpm dev${RST}  — starts Supabase (if needed) + Next.js"
+  echo "  ${DIM}  3.${RST}  Open ${BC}${APP_URL}${RST}"
   echo ""
 }
 

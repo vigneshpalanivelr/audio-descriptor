@@ -24,6 +24,28 @@ const uploadMetaSchema = z.object({
   intensity: z.enum(["verbatim", "light", "full"]).default("verbatim"),
 })
 
+interface InngestPayload {
+  noteId: string
+  userId: string
+  storagePath: string
+  durationSec: number
+  language: string
+  intensity: "verbatim" | "light" | "full"
+  tier: string
+}
+
+async function sendToInngest(payload: InngestPayload): Promise<void> {
+  if (!process.env["INNGEST_EVENT_KEY"]) {
+    appLogger.debug({ noteId: payload.noteId }, "upload:inngest_skipped_no_key")
+    return
+  }
+  try {
+    await inngest.send({ name: "audio/note.uploaded", data: payload })
+  } catch (err) {
+    appLogger.warn({ err, noteId: payload.noteId }, "upload:inngest_send_failed")
+  }
+}
+
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7)
 }
@@ -139,24 +161,15 @@ export async function POST(request: NextRequest) {
 
     await serviceClient.from("notes").update({ audio_storage_path: storagePath }).eq("id", note.id)
 
-    try {
-      await inngest.send({
-        name: "audio/note.uploaded",
-        data: {
-          noteId: note.id as string,
-          userId: user.id,
-          storagePath,
-          durationSec: meta.durationSec,
-          language: meta.language,
-          intensity: meta.intensity,
-          tier,
-        },
-      })
-    } catch (inngestErr) {
-      // Non-fatal: note is saved; transcription can be retried manually.
-      // Inngest dev server may not be running in local environments.
-      appLogger.warn({ err: inngestErr, noteId: note.id }, "upload:inngest_send_failed")
-    }
+    await sendToInngest({
+      noteId: note.id as string,
+      userId: user.id,
+      storagePath,
+      durationSec: meta.durationSec,
+      language: meta.language,
+      intensity: meta.intensity,
+      tier,
+    })
 
     return Response.json({ noteId: note.id }, { status: 201 })
   } catch (err) {
