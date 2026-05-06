@@ -1,7 +1,7 @@
 # QuillCast — Implementation Reference
 
 > Living document. Update whenever a version changes, a service is added, or an architectural decision is made.
-> Last updated: 2 May 2026
+> Last updated: 6 May 2026
 
 ---
 
@@ -28,7 +28,7 @@ graph TB
     end
 
     subgraph NextJS["Next.js 16 Server (Vercel)"]
-        MW[Middleware\nAuth guard + Rate limit]
+        MW[Proxy (proxy.ts)\nAuth guard + Rate limit]
         SSR[Server Components\nSSR / RSC]
         API[Route Handlers\n/api/*]
     end
@@ -278,6 +278,7 @@ erDiagram
         text title
         text transcript_raw
         text summary
+        text custom_prompt "added by migration 20260502"
         text audio_storage_path
         numeric audio_duration_sec
         text language_detected
@@ -293,6 +294,18 @@ erDiagram
         boolean is_archived
         timestamptz created_at
         timestamptz ready_at
+    }
+
+    note_versions {
+        uuid id PK
+        uuid note_id FK
+        uuid user_id FK
+        text intensity "verbatim|light|full|custom"
+        text custom_prompt
+        text summary
+        text llm_model
+        numeric cost_usd
+        timestamptz created_at
     }
 
     usage {
@@ -337,6 +350,7 @@ erDiagram
     }
 
     profiles ||--o{ notes : "owns"
+    notes ||--o{ note_versions : "archives to"
     profiles ||--o{ usage : "tracks"
     profiles ||--o{ payment_events : "triggers"
     profiles ||--o{ audit_logs : "generates"
@@ -415,81 +429,113 @@ graph LR
 src/
 ├── app/
 │   ├── (admin)/
-│   │   └── admin/page.tsx          ✅ Admin dashboard — double auth guard
+│   │   └── admin/page.tsx              ✅ Admin dashboard — double auth guard
 │   ├── (app)/
-│   │   ├── layout.tsx              ✅ Auth guard layout (server component)
-│   │   ├── notes/page.tsx          ✅ Empty state + "New Note" stub
-│   │   ├── notes/new/page.tsx      ✅ Recorder page
-│   │   └── notes/[id]/page.tsx     ✅ Note detail — title edit + status polling
+│   │   ├── layout.tsx                  ✅ Auth guard + UserMenu with display_name
+│   │   ├── notes/page.tsx              ✅ Notes list (50 cards + status badges)
+│   │   ├── notes/new/page.tsx          ✅ Recorder page
+│   │   └── notes/[id]/
+│   │       ├── page.tsx                ✅ Note detail shell (server)
+│   │       └── NoteDetailClient.tsx    ✅ Full-featured note detail (client):
+│   │                                      title edit (debounced) · transcript/summary
+│   │                                      side-by-side · inline summary edit · delete
+│   │                                      (2-step confirm) · audio countdown timer ·
+│   │                                      download audio · regenerate (3 intensities +
+│   │                                      custom prompt) · version history expand
 │   ├── api/
 │   │   ├── admin/
-│   │   │   ├── stats/route.ts      ✅ Admin stats (auth + admin check)
-│   │   │   └── users/route.ts      ✅ Paginated users (Zod-validated params)
-│   │   ├── inngest/route.ts        ✅ Inngest webhook (GET/POST/PUT serve handler)
-│   │   └── upload/route.ts         ✅ Audio upload + Inngest event dispatch
+│   │   │   ├── stats/route.ts          ✅ Admin stats
+│   │   │   └── users/route.ts          ✅ Paginated users
+│   │   ├── inngest/route.ts            ✅ Inngest webhook handler
+│   │   ├── notes/
+│   │   │   └── [id]/
+│   │   │       ├── route.ts            ✅ PATCH (summary/title) + DELETE (+ storage)
+│   │   │       ├── audio/route.ts      ✅ GET signed URL; 410 + lazy cleanup on expiry
+│   │   │       └── regenerate/route.ts ✅ POST — re-run LLM; saves version history
+│   │   ├── payments/
+│   │   │   ├── razorpay/               ✅ checkout + webhook (HMAC, idempotent)
+│   │   │   └── lemonsqueezy/           ✅ checkout + webhook (sha256=, idempotent)
+│   │   └── upload/route.ts             ✅ Audio upload + Inngest event (default: verbatim)
 │   ├── auth/
-│   │   ├── callback/route.ts       ✅ PKCE code exchange + safe redirect
-│   │   ├── sign-in/
-│   │   │   ├── page.tsx            ✅ Server component with redirect guard
-│   │   │   └── SignInForm.tsx      ✅ Google OAuth + magic link (client)
-│   │   └── sign-out/route.ts       ✅ POST handler + CSRF origin check
-│   ├── error.tsx                   ✅ Error boundary
-│   ├── global-error.tsx            ✅ Root error boundary
-│   ├── layout.tsx                  ✅ Root layout (Geist font + metadata)
-│   └── page.tsx                    ✅ Landing page (hero, pricing, FAQ)
+│   │   ├── callback/route.ts           ✅ PKCE + safe redirect
+│   │   ├── sign-in/page.tsx            ✅ Google OAuth + magic link
+│   │   └── sign-out/route.ts           ✅ POST + CSRF origin check
+│   ├── error.tsx                       ✅ Error boundary
+│   ├── global-error.tsx                ✅ Root error boundary
+│   ├── layout.tsx                      ✅ Root layout
+│   └── page.tsx                        ✅ Landing page — auth-aware nav (logo→Link)
+├── components/
+│   ├── UserMenu.tsx                    ✅ Username + ▾ dropdown, closes on outside click
+│   ├── recording/Recorder.tsx          ✅ MediaRecorder (default intensity: verbatim)
+│   └── providers/                      ✅ PostHog + Sentry providers
 ├── config/
-│   └── app.ts                      ✅ APP_CONFIG — single source of name
+│   └── app.ts                          ✅ APP_CONFIG single source of truth
 ├── lib/
-│   ├── api/error.ts                ✅ Typed API errors + Zod formatter
+│   ├── api/error.ts                    ✅ Typed API errors + Zod formatter
+│   ├── cost/cap.ts                     ✅ Daily spend cap ($20)
 │   ├── llm/
-│   │   ├── route.ts                ✅ Model selection + runCleanup + generateTitle
-│   │   └── prompts/                ✅ verbatim · light · full · title · write-like-me
+│   │   ├── route.ts                    ✅ 3 providers; customPrompt? param
+│   │   └── prompts/                    ✅ verbatim · light · full · title · write-like-me
 │   ├── logger/
-│   │   ├── index.ts                ✅ Pino + PII redaction (34 fields) + child loggers
-│   │   └── audit.ts                ✅ 30+ event types · DB persistence · user masking
+│   │   ├── index.ts                    ✅ Pino + PII redaction (34 fields)
+│   │   └── audit.ts                    ✅ 31 event types incl. note.updated
+│   ├── payments/
+│   │   ├── razorpay.ts                 ✅ Order create + plan lookup
+│   │   └── lemonsqueezy.ts             ✅ Checkout URL + plan lookup
 │   ├── security/
-│   │   ├── ratelimit.ts            ✅ In-memory rate limiter + RATE_LIMITS config
-│   │   ├── sanitize.ts             ✅ UUID/MIME/text/audioUrl/redirect validators + BiDi strip
-│   │   └── webhook.ts              ✅ HMAC-SHA256 timing-safe + LemonSqueezy sha256= prefix
+│   │   ├── ratelimit.ts                ✅ In-memory; upload·regen·checkout·signIn limits
+│   │   ├── sanitize.ts                 ✅ UUID/MIME/text/audioUrl/redirect + BiDi strip
+│   │   └── webhook.ts                  ✅ HMAC-SHA256 timing-safe + sha256= prefix
 │   ├── stt/
-│   │   ├── route.ts                ✅ Routing decision tree
-│   │   ├── languages.ts            ✅ INDIAN_LANGUAGES constant
-│   │   ├── types.ts                ✅ TranscribeRequest / TranscribeResult
-│   │   ├── openai.ts               ✅ gpt-4o-mini-transcribe adapter
-│   │   ├── sarvam.ts               ✅ Saaras v3 adapter (feature-flagged)
-│   │   └── elevenlabs.ts           ✅ Scribe v2 adapter (feature-flagged)
+│   │   ├── route.ts                    ✅ STT routing decision tree
+│   │   ├── languages.ts                ✅ INDIAN_LANGUAGES
+│   │   ├── openai.ts · sarvam.ts · elevenlabs.ts · gemini.ts
+│   │   └── types.ts
 │   ├── inngest/
-│   │   ├── client.ts               ✅ Inngest client + typed EventSchemas
-│   │   ├── transcribe.ts           ✅ transcribeNote function (audio.uploaded)
-│   │   └── cleanup.ts              ✅ cleanupNote function (note.transcribed)
+│   │   ├── client.ts                   ✅ typed EventSchemas
+│   │   ├── transcribe.ts               ✅ audio.uploaded → STT
+│   │   ├── cleanup.ts                  ✅ note.transcribed → LLM + usage
+│   │   └── cost-digest.ts              ✅ daily cron → Resend email
 │   ├── supabase/
-│   │   ├── client.ts               ✅ Browser client
-│   │   ├── server.ts               ✅ Server client (SSR cookies)
-│   │   └── service.ts              ✅ Service-role (Inngest jobs only)
-│   └── usage/limits.ts             ✅ Tier caps · canRecord · getNoteDurationLimit
-├── middleware.ts                   ✅ Auth guard + rate limit (upload + sign-in routes)
-└── types/index.ts                  ✅ Shared types (UserTier, Note, Profile, etc.)
+│   │   ├── client.ts · server.ts · service.ts
+│   └── usage/limits.ts                 ✅ Tier caps · canRecord · duration limit
+├── proxy.ts                            ✅ Auth guard + rate limit (Next.js 16 proxy)
+│                                          3 s timeout on supabase.auth.getUser()
+└── types/index.ts                      ✅ UserTier · NoteIntensity · NoteVersionIntensity
+
+supabase/migrations/
+├── 20260501000000_init.sql             ✅ profiles · notes · usage · payment_events
+│                                          audit_logs · user_sessions + RLS
+└── 20260502000000_note_versions.sql    ✅ notes.custom_prompt column + note_versions table
 
 tests/
-├── unit/lib/
-│   ├── api/error.test.ts           ✅ 20 tests
-│   ├── llm/route.test.ts           ✅ 14 tests
-│   ├── llm/prompts.test.ts         ✅ 14 tests
-│   ├── logger/audit.test.ts        ✅ 17 tests
-│   ├── logger/index.test.ts        ✅ 10 tests
-│   ├── security/ratelimit.test.ts  ✅ 4 tests
-│   ├── security/sanitize.test.ts   ✅ 40 tests (incl. SSRF + open redirect + BiDi)
-│   ├── security/webhook.test.ts    ✅ 13 tests (incl. sha256= prefix)
-│   ├── stt/route.test.ts           ✅ 9 tests
-│   ├── stt/languages.test.ts       ✅ 5 tests
-│   └── usage/limits.test.ts        ✅ 25 tests
+├── unit/
+│   ├── components/
+│   │   └── UserMenu.test.tsx           ✅ 7 tests (RTL)
+│   └── lib/
+│       ├── api/error.test.ts           ✅ 20 tests
+│       ├── cost/cap.test.ts            ✅ 11 tests
+│       ├── llm/route.test.ts           ✅ 47 tests (3 providers + custom prompt)
+│       ├── llm/prompts.test.ts         ✅ 14 tests
+│       ├── logger/audit.test.ts        ✅ 17 tests
+│       ├── logger/index.test.ts        ✅ 11 tests
+│       ├── payments/razorpay.test.ts   ✅ 9 tests
+│       ├── payments/lemonsqueezy.test.ts ✅ 13 tests
+│       ├── security/ratelimit.test.ts  ✅ 4 tests
+│       ├── security/sanitize.test.ts   ✅ 40 tests
+│       ├── security/webhook.test.ts    ✅ 13 tests
+│       ├── stt/route.test.ts           ✅ 12 tests
+│       ├── stt/languages.test.ts       ✅ 5 tests
+│       └── usage/limits.test.ts        ✅ 25 tests
 ├── security/
-│   ├── attack-scenarios.test.ts    ✅ 42 attack scenarios
-│   └── admin-access-control.test.ts ✅ 10 scenarios
+│   ├── attack-scenarios.test.ts        ✅ 55 attack scenarios
+│   └── admin-access-control.test.ts    ✅ 10 scenarios
 ├── shell/
-│   └── manage.test.sh              ✅ 70 bash unit tests
+│   └── manage.test.sh                  ✅ 70 bash unit tests
 └── e2e/
-    └── smoke.test.ts               ✅ Landing page + auth smoke
+    └── smoke.test.ts                   ✅ Landing page + auth smoke
+
+Total vitest tests: 313 — 100% coverage (lines/functions/branches/statements)
 ```
 
 ---
@@ -518,7 +564,7 @@ graph LR
 | V4  | HIGH     | CSRF on POST `/auth/sign-out`    | `auth/sign-out/route.ts`   | —                                               |
 | V5  | HIGH     | LemonSqueezy webhook bypass      | `lib/security/webhook.ts`  | `webhook.test.ts`                               |
 | V6  | MEDIUM   | BiDi trojan-source injection     | `lib/security/sanitize.ts` | `sanitize.test.ts` · `attack-scenarios.test.ts` |
-| V7  | MEDIUM   | Auth routes not rate-limited     | `middleware.ts`            | `attack-scenarios.test.ts`                      |
+| V7  | MEDIUM   | Auth routes not rate-limited     | `proxy.ts`                 | `attack-scenarios.test.ts`                      |
 | V8  | MEDIUM   | `getSession()` in admin page     | `(admin)/admin/page.tsx`   | `admin-access-control.test.ts`                  |
 
 ---
@@ -609,6 +655,31 @@ graph LR
 | `cost-digest.ts` cron — daily email via Resend              | ✅     | `src/lib/inngest/cost-digest.ts` — daily 00:00 UTC, emails via Resend |
 | Daily company spend cap ($20) pre-flight check              | ✅     | Checked in upload route + cleanup step; returns 503 when exceeded     |
 
+### Session 6 — UX polish, note CRUD, verbatim default ✅ Complete
+
+| Deliverable                                                     | Status | Notes                                                                                 |
+| --------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------- |
+| Fix "Note not found" bug                                        | ✅     | Removed `custom_prompt` from fetchNote SELECT; PGRST116 vs other errors distinguished |
+| QuillCast logo → clickable `<Link href="/">` everywhere         | ✅     | Landing page + app layout                                                             |
+| `UserMenu` component — username + ▾ dropdown with Sign out      | ✅     | Closes on outside click; 7 RTL unit tests; 100% coverage                              |
+| App layout fetches `display_name` and renders `UserMenu`        | ✅     | Username visible on every authenticated page                                          |
+| `DELETE /api/notes/[id]`                                        | ✅     | Removes audio from Storage, then deletes note row; audit logged                       |
+| `PATCH /api/notes/[id]`                                         | ✅     | Updates summary and/or title; `note.updated` audit event                              |
+| `GET /api/notes/[id]/audio`                                     | ✅     | 5-min signed URL; 410 + lazy cleanup on 24 h expiry                                   |
+| Audio expiry countdown timer (client-side)                      | ✅     | 24 h from `ready_at`; amber when < 1 h; updates every second                          |
+| Download audio button                                           | ✅     | In NoteDetailClient; calls audio API; triggers `<a>.click()`                          |
+| Two-step delete confirmation flow                               | ✅     | "Delete this note?" + "Yes, delete" + "Cancel"                                        |
+| Inline summary editing                                          | ✅     | Edit / Save / Cancel toggle; calls PATCH route                                        |
+| Custom prompt sends `intensity: "verbatim"` (not `"light"`)     | ✅     | NoteDetailClient + regenerate route                                                   |
+| Default intensity → `"verbatim"` everywhere                     | ✅     | `Recorder.tsx` initial state + upload route `.default()`                              |
+| `note.updated` audit event type added                           | ✅     | `src/lib/logger/audit.ts`                                                             |
+| `NoteReadyContent` sub-component extracted                      | ✅     | Reduces `NoteDetailClient` cognitive complexity below sonarjs limit                   |
+| `manage.sh`: `timeout 5 docker info` on all 3 checks            | ✅     | No more 10-second hang when Docker Desktop is closed                                  |
+| `manage.sh`: `supabase start` streams live via `tee`            | ✅     | No more silent buffering during container startup                                     |
+| `middleware.ts` → `proxy.ts`; `middleware()` → `proxy()`        | ✅     | Next.js 16 breaking change; deprecation warning eliminated                            |
+| 3-second timeout on `supabase.auth.getUser()` in proxy          | ✅     | Prevents 26-second page hang when Supabase is unreachable                             |
+| `vitest.config.ts` coverage exclusion updated to `src/proxy.ts` | ✅     |                                                                                       |
+
 ### Phase 2 — Competitive Parity (Weeks 5–10)
 
 _(Detailed breakdown added when Phase 1 ships)_
@@ -693,7 +764,7 @@ pnpm dev                          # http://localhost:3000
 - Format: `type(scope): short description` (Conventional Commits)
 - Types: `feat` `fix` `chore` `test` `docs` `security` `refactor`
 - Commit after every meaningful unit — never batch unrelated changes
-- Always push immediately: `git push -u origin claude/plan-mvp-naming-Y7eZq`
+- Always push immediately: `git push -u origin claude/review-project-setup-dapqK`
 
 ---
 
