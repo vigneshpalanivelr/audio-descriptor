@@ -456,8 +456,8 @@ cmd_start() {
     nohup pnpm start >"$LOG_FILE" 2>&1 &
   else
     echo ""
-    echo "  ${DIM}\$${RST} ${BC}pnpm dev  ${DIM}(background)${RST}"
-    nohup pnpm dev >"$LOG_FILE" 2>&1 &
+    echo "  ${DIM}\$${RST} ${BC}pnpm run dev:next  ${DIM}(background)${RST}"
+    nohup pnpm run dev:next >"$LOG_FILE" 2>&1 &
   fi
 
   local pid=$!
@@ -487,6 +487,28 @@ cmd_start() {
     warn "Server did not respond within 15 s — check ${LOG_FILE}"
   fi
   echo ""
+}
+
+# ─── dev (foreground — the normal developer workflow) ────────────────────────
+cmd_dev() {
+  show_config
+  ensure_supabase
+
+  mkdir -p logs
+
+  if nc -z 127.0.0.1 8288 2>/dev/null; then
+    export INNGEST_DEV=1
+    info "Inngest dev server detected on :8288 → INNGEST_DEV=1"
+  else
+    unset INNGEST_DEV
+    info "Inngest dev server not running — background jobs disabled"
+    info "Run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal to enable them"
+  fi
+
+  header "🚀  ${APP_NAME} dev server — ${BC}${APP_URL}${RST}  (Ctrl-C to stop)"
+  echo ""
+  # exec replaces this shell process so Ctrl-C goes straight to next dev
+  exec node_modules/.bin/next dev
 }
 
 # ─── stop ─────────────────────────────────────────────────────────────────────
@@ -748,7 +770,8 @@ cmd_help() {
   ${DIM}  install              ${RST}  Check prereqs, pnpm install, create .env.local
 
   ${BD}Server${RST}
-  ${DIM}  start [dev|prod]     ${RST}  Ensure Supabase running + apply migrations, then start app ${DIM}(default: dev)${RST}
+  ${DIM}  dev                  ${RST}  ${BG}Normal dev workflow${RST}: ensure Supabase → migrations → next dev ${DIM}(foreground)${RST}
+  ${DIM}  start [dev|prod]     ${RST}  Same as dev but runs in background with PID file ${DIM}(default: dev)${RST}
   ${DIM}  stop                 ${RST}  Stop the running app server
   ${DIM}  restart [dev|prod]   ${RST}  Stop → show config → ensure Supabase → start
   ${DIM}  build                ${RST}  Production build ${DIM}(shows config first)${RST}
@@ -790,6 +813,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   COMMAND="${1:-help}"
   case "$COMMAND" in
     install)  cmd_install ;;
+    dev)      cmd_dev ;;
     start)    cmd_start   "${2:-dev}" ;;
     stop)     cmd_stop ;;
     restart)  cmd_restart "${2:-dev}" ;;
