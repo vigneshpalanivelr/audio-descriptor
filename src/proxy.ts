@@ -36,8 +36,8 @@ function resolveRateLimit(pathname: string, method: string, ip: string): NextRes
 
 function buildSupabaseProxyClient(request: NextRequest, response: NextResponse) {
   return createServerClient(
-    process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
-    process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"]!,
+    process.env["NEXT_PUBLIC_SUPABASE_URL"] || "http://localhost:54321",
+    process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"] || "placeholder",
     {
       auth: { retryAttempts: 0 },
       cookies: {
