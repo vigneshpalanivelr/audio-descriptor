@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/server"
+import { safeGetUser } from "@/lib/supabase/safe-auth"
 import { APP_CONFIG } from "@/config/app"
 import type { NoteStatus } from "@/types"
 
@@ -48,9 +49,7 @@ function formatDuration(seconds: number | null): string {
 
 export default async function NotesPage() {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await safeGetUser(supabase)
 
   const { data: notes } = user
     ? await supabase

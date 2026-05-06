@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
+import { safeGetUser } from "@/lib/supabase/safe-auth"
 import { redirect } from "next/navigation"
 import { APP_CONFIG } from "@/config/app"
 import SignInForm from "./SignInForm"
@@ -9,9 +10,7 @@ export const metadata = {
 
 export default async function SignInPage() {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await safeGetUser(supabase)
 
   if (user) redirect("/notes")
 

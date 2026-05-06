@@ -44,7 +44,7 @@ function buildTransports(): pino.DestinationStream {
         colorize: true,
         translateTime: "SYS:yyyy-mm-dd HH:MM:ss",
         ignore: "pid,hostname",
-        messageFormat: "[{module}] {msg}",
+        messageFormat: "{time} [{module}] {msg}",
       },
     })
   }

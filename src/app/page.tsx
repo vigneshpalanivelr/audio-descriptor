@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { APP_CONFIG } from "@/config/app"
 import { createClient } from "@/lib/supabase/server"
+import { safeGetUser } from "@/lib/supabase/safe-auth"
 
 const TIERS = [
   {
@@ -62,9 +63,7 @@ const FAQS = [
 
 export default async function LandingPage() {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await safeGetUser(supabase)
 
   const { data: profile } = user
     ? await supabase.from("profiles").select("display_name").eq("id", user.id).single()

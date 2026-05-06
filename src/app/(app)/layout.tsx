@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
+import { safeGetUser } from "@/lib/supabase/safe-auth"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { APP_CONFIG } from "@/config/app"
@@ -6,9 +7,7 @@ import { UserMenu } from "@/components/UserMenu"
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await safeGetUser(supabase)
 
   if (!user) redirect("/auth/sign-in")
 
