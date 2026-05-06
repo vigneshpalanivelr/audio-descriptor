@@ -12,6 +12,7 @@ export type AuditEventType =
   // Notes
   | "note.created"
   | "note.viewed"
+  | "note.updated"
   | "note.deleted"
   | "note.regenerated"
   // Payments

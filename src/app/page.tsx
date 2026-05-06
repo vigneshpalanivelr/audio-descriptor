@@ -76,7 +76,9 @@ export default async function LandingPage() {
     <div className="flex flex-col min-h-full font-sans">
       {/* Nav */}
       <nav className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-background/80 backdrop-blur border-b border-foreground/10">
-        <span className="font-bold text-lg tracking-tight">{APP_CONFIG.name}</span>
+        <Link href="/" className="font-bold text-lg tracking-tight">
+          {APP_CONFIG.name}
+        </Link>
         {user ? (
           <div className="flex items-center gap-3">
             <span className="text-sm text-foreground/60 hidden sm:block">{displayName}</span>

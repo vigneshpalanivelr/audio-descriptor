@@ -21,7 +21,7 @@ const uploadMetaSchema = z.object({
     // eslint-disable-next-line security/detect-unsafe-regex -- fixed-length quantifiers only; provably safe
     .regex(/^[a-z]{2,3}(-[A-Z]{2,3})?$/)
     .default("en"),
-  intensity: z.enum(["verbatim", "light", "full"]).default("light"),
+  intensity: z.enum(["verbatim", "light", "full"]).default("verbatim"),
 })
 
 function currentMonth(): string {

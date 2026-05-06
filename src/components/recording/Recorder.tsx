@@ -177,7 +177,7 @@ function RecorderControls({
 
 export function Recorder({ onComplete, onDiscard }: RecorderProps) {
   const [recorderState, setRecorderState] = useState<RecorderState>("idle")
-  const [intensity, setIntensity] = useState<NoteIntensity>("light")
+  const [intensity, setIntensity] = useState<NoteIntensity>("verbatim")
   const [language, setLanguage] = useState("en")
   const [duration, setDuration] = useState(0)
   const [stream, setStream] = useState<MediaStream | null>(null)
