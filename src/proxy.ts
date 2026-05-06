@@ -4,6 +4,7 @@ import { checkRateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/securit
 
 const PROTECTED_PATHS = ["/notes", "/settings"]
 const AUTH_PATHS = ["/auth/sign-in"]
+const SUPABASE_TIMEOUT_MS = 3000
 
 function tooManyRequests(resetAt: number): NextResponse {
   return new NextResponse("Too Many Requests", {
@@ -33,7 +34,7 @@ function resolveRateLimit(pathname: string, method: string, ip: string): NextRes
   return null
 }
 
-function buildSupabaseMiddlewareClient(request: NextRequest, response: NextResponse) {
+function buildSupabaseProxyClient(request: NextRequest, response: NextResponse) {
   return createServerClient(
     process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
     process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"]!,
@@ -51,7 +52,19 @@ function buildSupabaseMiddlewareClient(request: NextRequest, response: NextRespo
   )
 }
 
-export async function middleware(request: NextRequest) {
+async function getUserOrNull(supabase: ReturnType<typeof buildSupabaseProxyClient>) {
+  const timeout = new Promise<null>((resolve) =>
+    setTimeout(() => resolve(null), SUPABASE_TIMEOUT_MS),
+  )
+  try {
+    const result = await Promise.race([supabase.auth.getUser().then((r) => r.data.user), timeout])
+    return result
+  } catch {
+    return null
+  }
+}
+
+export async function proxy(request: NextRequest) {
   const response = NextResponse.next({ request })
   const { pathname, method } = { pathname: request.nextUrl.pathname, method: request.method }
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown"
@@ -64,10 +77,8 @@ export async function middleware(request: NextRequest) {
 
   if (!isProtected && !isAuthPath) return response
 
-  const supabase = buildSupabaseMiddlewareClient(request, response)
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const supabase = buildSupabaseProxyClient(request, response)
+  const user = await getUserOrNull(supabase)
 
   if (isProtected && !user) {
     const url = request.nextUrl.clone()

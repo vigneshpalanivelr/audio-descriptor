@@ -34,8 +34,8 @@ export default defineConfig({
         "src/lib/stt/elevenlabs.ts",
         "src/lib/stt/gemini.ts",
         "src/lib/stt/types.ts",
-        // Next.js middleware — tested via E2E; auth flow depends on real Supabase
-        "src/middleware.ts",
+        // Next.js proxy — tested via E2E; auth flow depends on real Supabase
+        "src/proxy.ts",
         // Static config — no logic
         "src/config/**",
         // Inngest job functions — require Inngest runtime; tested via E2E/integration
