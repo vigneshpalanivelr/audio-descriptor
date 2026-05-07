@@ -1,7 +1,7 @@
 # QuillCast — Implementation Reference
 
 > Living document. Update whenever a version changes, a service is added, or an architectural decision is made.
-> Last updated: 6 May 2026
+> Last updated: 7 May 2026
 
 ---
 
@@ -55,7 +55,7 @@ graph TB
     subgraph LLM["LLM Cleanup"]
         HAIKU[Claude Haiku 4.5\nall tiers · default]
         SONNET[Claude Sonnet 4.6\nPro tier · non-Indic]
-        GEMINI[Gemini 3 Flash\nfallback · long context]
+        GEMINI[Gemini 2.5 Flash\nfallback · long context]
     end
 
     subgraph Payments["Payments"]
@@ -153,6 +153,8 @@ sequenceDiagram
     App-->>User: Note ready — transcript + summary shown
 ```
 
+> **Inngest fallback:** When neither `INNGEST_EVENT_KEY` nor `INNGEST_DEV=1` is set, the upload route calls `processNoteDirectly()` — synchronous in-process transcription with no queue. `manage.sh` auto-sets `INNGEST_DEV=1` when the dev server is detected on `:8288`.
+
 ---
 
 ## 4. STT Routing Decision Tree
@@ -195,6 +197,9 @@ flowchart TD
     API --> RESULT([summary · model · costUsd])
 ```
 
+> **LLM provider priority:** Anthropic → OpenAI → Gemini (first available key wins).  
+> Override with `LLM_PROVIDER=anthropic|openai|gemini` in `.env.local`.
+
 ---
 
 ## 6. Security Architecture
@@ -229,7 +234,7 @@ graph TB
     end
 
     subgraph DB["Supabase / DB Layer"]
-        RLS[Row Level Security\nall 4 tables\nusers see only own rows]
+        RLS[Row Level Security\nall tables\nusers see only own rows]
         PARAM[Parameterised queries\nno raw SQL]
         MAP[Map accumulator\nno object injection]
     end
@@ -278,7 +283,7 @@ erDiagram
         text title
         text transcript_raw
         text summary
-        text custom_prompt "added by migration 20260502"
+        text custom_prompt "migration 20260502"
         text audio_storage_path
         numeric audio_duration_sec
         text language_detected
@@ -292,6 +297,7 @@ erDiagram
         text[] tags
         boolean is_starred
         boolean is_archived
+        boolean is_pinned "migration 20260503"
         timestamptz created_at
         timestamptz ready_at
     }
@@ -372,7 +378,7 @@ graph LR
 
     QUALITY --> SHELL[Shell Tests\nmanage.test.sh\n70 tests]
     QUALITY --> UNIT[Unit + Integration\n+ Coverage\n100% threshold]
-    QUALITY --> SEC[Security Tests\n51 attack scenarios]
+    QUALITY --> SEC[Security Tests\n65 scenarios]
 
     SHELL & UNIT & SEC --> E2E[E2E Tests\nPlaywright chromium\ngolden path smoke]
     AUDIT --> GREEN
@@ -404,7 +410,7 @@ graph LR
 | **STT — premium**       | ElevenLabs Scribe v2            | REST                                | `ENABLE_ELEVENLABS` flag    |
 | **LLM — default**       | Claude Haiku 4.5                | `@anthropic-ai/sdk` 0.52.x          | `claude-haiku-4-5-20251001` |
 | **LLM — Pro**           | Claude Sonnet 4.6               | (same)                              | `claude-sonnet-4-6`         |
-| **LLM — fallback**      | Gemini 3 Flash                  | `@google/generative-ai` 0.24.x      | Long context                |
+| **LLM — fallback**      | Gemini 2.5 Flash                | `@google/generative-ai` 0.24.x      | Long context                |
 | **Payments (India)**    | Razorpay                        | `razorpay` 2.x                      | UPI AutoPay, INR            |
 | **Payments (global)**   | Lemon Squeezy                   | `@lemonsqueezy/lemonsqueezy.js` 4.x | MoR — handles VAT/GST       |
 | **Error monitoring**    | Sentry                          | `@sentry/nextjs` 9.x                |                             |
@@ -449,13 +455,13 @@ src/
 │   │   ├── inngest/route.ts            ✅ Inngest webhook handler
 │   │   ├── notes/
 │   │   │   └── [id]/
-│   │   │       ├── route.ts            ✅ PATCH (summary/title) + DELETE (+ storage)
+│   │   │       ├── route.ts            ✅ GET (error.code check) · PATCH · DELETE
 │   │   │       ├── audio/route.ts      ✅ GET signed URL; 410 + lazy cleanup on expiry
 │   │   │       └── regenerate/route.ts ✅ POST — re-run LLM; saves version history
 │   │   ├── payments/
 │   │   │   ├── razorpay/               ✅ checkout + webhook (HMAC, idempotent)
 │   │   │   └── lemonsqueezy/           ✅ checkout + webhook (sha256=, idempotent)
-│   │   └── upload/route.ts             ✅ Audio upload + Inngest event (default: verbatim)
+│   │   └── upload/route.ts             ✅ Audio upload + Inngest/direct fallback
 │   ├── auth/
 │   │   ├── callback/route.ts           ✅ PKCE + safe redirect
 │   │   ├── sign-in/page.tsx            ✅ Google OAuth + magic link
@@ -463,7 +469,7 @@ src/
 │   ├── error.tsx                       ✅ Error boundary
 │   ├── global-error.tsx                ✅ Root error boundary
 │   ├── layout.tsx                      ✅ Root layout
-│   └── page.tsx                        ✅ Landing page — auth-aware nav (logo→Link)
+│   └── page.tsx                        ✅ Landing page — auth-aware nav
 ├── components/
 │   ├── UserMenu.tsx                    ✅ Username + ▾ dropdown, closes on outside click
 │   ├── recording/Recorder.tsx          ✅ MediaRecorder (default intensity: verbatim)
@@ -478,7 +484,11 @@ src/
 │   │   └── prompts/                    ✅ verbatim · light · full · title · write-like-me
 │   ├── logger/
 │   │   ├── index.ts                    ✅ Pino + PII redaction (34 fields)
+│   │   │                                  dev: multistream (pino-pretty + file)
+│   │   │                                  prod: multistream (stdout + rotating file)
 │   │   └── audit.ts                    ✅ 31 event types incl. note.updated
+│   ├── note-processor/
+│   │   └── index.ts                    ✅ Direct (sync) transcription fallback
 │   ├── payments/
 │   │   ├── razorpay.ts                 ✅ Order create + plan lookup
 │   │   └── lemonsqueezy.ts             ✅ Checkout URL + plan lookup
@@ -504,14 +514,23 @@ src/
 └── types/index.ts                      ✅ UserTier · NoteIntensity · NoteVersionIntensity
 
 supabase/migrations/
-├── 20260501000000_init.sql             ✅ profiles · notes · usage · payment_events
-│                                          audit_logs · user_sessions + RLS
-└── 20260502000000_note_versions.sql    ✅ notes.custom_prompt column + note_versions table
+├── 20260501000000_init.sql             ✅ profiles · notes · usage · payment_events + RLS
+├── 20260501000001_audit_and_admin.sql  ✅ audit_logs · user_sessions · admin SQL functions
+├── 20260501000002_storage_bucket.sql   ✅ private audio bucket + RLS policies
+├── 20260502000000_note_versions.sql    ✅ note_versions table · notes.custom_prompt column
+└── 20260503000000_pinned.sql           ✅ notes.is_pinned column + composite index
 
 tests/
 ├── unit/
+│   ├── app/api/
+│   │   ├── notes/
+│   │   │   ├── get.test.ts             ✅  8 tests (incl. 500 for non-PGRST116 errors)
+│   │   │   ├── patch.test.ts           ✅ 16 tests
+│   │   │   ├── delete.test.ts          ✅  8 tests
+│   │   │   └── regenerate.test.ts      ✅ 13 tests
+│   │   └── upload/route.test.ts        ✅  6 tests (incl. INNGEST_DEV=1 path)
 │   ├── components/
-│   │   └── UserMenu.test.tsx           ✅ 7 tests (RTL)
+│   │   └── UserMenu.test.tsx           ✅  7 tests (RTL)
 │   └── lib/
 │       ├── api/error.test.ts           ✅ 20 tests
 │       ├── cost/cap.test.ts            ✅ 11 tests
@@ -519,13 +538,14 @@ tests/
 │       ├── llm/prompts.test.ts         ✅ 14 tests
 │       ├── logger/audit.test.ts        ✅ 17 tests
 │       ├── logger/index.test.ts        ✅ 11 tests
-│       ├── payments/razorpay.test.ts   ✅ 9 tests
+│       ├── note-processor/index.test.ts ✅  8 tests
+│       ├── payments/razorpay.test.ts   ✅  9 tests
 │       ├── payments/lemonsqueezy.test.ts ✅ 13 tests
-│       ├── security/ratelimit.test.ts  ✅ 4 tests
+│       ├── security/ratelimit.test.ts  ✅  4 tests
 │       ├── security/sanitize.test.ts   ✅ 40 tests
 │       ├── security/webhook.test.ts    ✅ 13 tests
 │       ├── stt/route.test.ts           ✅ 12 tests
-│       ├── stt/languages.test.ts       ✅ 5 tests
+│       ├── stt/languages.test.ts       ✅  5 tests
 │       └── usage/limits.test.ts        ✅ 25 tests
 ├── security/
 │   ├── attack-scenarios.test.ts        ✅ 55 attack scenarios
@@ -535,26 +555,36 @@ tests/
 └── e2e/
     └── smoke.test.ts                   ✅ Landing page + auth smoke
 
-Total vitest tests: 313 — 100% coverage (lines/functions/branches/statements)
+Total vitest tests: 372 — 100% coverage (lines/functions/branches/statements)
 ```
 
 ---
 
-## 11. Security Hardening — Implemented
+## 11. What We Own vs. Outsource
 
-```mermaid
-graph LR
-    subgraph Fixed["Vulnerabilities Fixed"]
-        V1["CRITICAL: Open Redirect\n?next= param validated\nisSafeRedirectPath()"]
-        V2["CRITICAL: SSRF\naudioUrl origin allowlist\nvalidateAudioUrl()"]
-        V3["HIGH: Missing HTTP Headers\nCSP · HSTS · X-Frame-Options\nnext.config.ts headers()"]
-        V4["HIGH: CSRF on sign-out\nOrigin header check\n403 on cross-origin POST"]
-        V5["HIGH: LemonSqueezy sig bug\nsha256= prefix stripped\nbefore HMAC compare"]
-        V6["MEDIUM: BiDi smuggling\nU+202A–202E U+2066–2069\nstripped from user text"]
-        V7["MEDIUM: Auth brute-force\nPOST /auth/sign-in rate limited\n5 req/min/IP"]
-        V8["MEDIUM: Stale JWT\ngetUser() replaces getSession()\nin admin page"]
-    end
-```
+| Concern                      | Outsourced to                              | What we build                                 |
+| ---------------------------- | ------------------------------------------ | --------------------------------------------- |
+| **Authentication**           | Supabase Auth (Google OAuth + magic links) | Sign-in UI + callback route                   |
+| **Database**                 | Supabase (managed Postgres)                | Schema migrations + RLS policies              |
+| **File storage**             | Supabase Storage                           | Upload logic + signed URL generation          |
+| **Realtime (live status)**   | Supabase Realtime                          | Client subscription hook                      |
+| **Background jobs / queues** | Inngest                                    | Job function code (transcribe, cleanup, cron) |
+| **Speech-to-Text**           | OpenAI / Sarvam / ElevenLabs / Gemini      | Routing logic + adapter wrappers              |
+| **LLM cleanup**              | Anthropic / OpenAI / Gemini                | Prompt templates + routing logic              |
+| **Audio codec**              | ffmpeg-wasm (browser-side)                 | Chunk-split logic for files > 25 MB           |
+| **Email delivery**           | Resend                                     | Email template + API call                     |
+| **Payments — India**         | Razorpay                                   | Checkout initiation + webhook handler         |
+| **Payments — Global**        | Lemon Squeezy (MoR, handles GST/VAT)       | Checkout link + webhook handler               |
+| **Frontend hosting**         | Vercel                                     | Zero-config (push to deploy)                  |
+| **Error monitoring**         | Sentry                                     | Error boundary wrapper + DSN config           |
+| **Product analytics**        | PostHog                                    | Event calls + session replay setup            |
+
+**What we fully own:**
+Recording UI · STT routing · LLM routing + prompts · Notes list + detail UI · Usage tracking + enforcement · Payment webhook handlers · Cost-tracking cron + daily cap guard · Admin dashboard · Landing page
+
+---
+
+## 12. Security Hardening — Implemented
 
 | ID  | Severity | Vulnerability                    | File fixed                 | Test file                                       |
 | --- | -------- | -------------------------------- | -------------------------- | ----------------------------------------------- |
@@ -569,169 +599,186 @@ graph LR
 
 ---
 
-## 12. Implementation Progress
+## 13. Implementation Progress
 
-### Session 1 — Project Scaffold ✅ Complete
+### Sessions 1–5 — MVP ✅ Complete
 
-| Deliverable                                                                    | Status | Notes                                         |
-| ------------------------------------------------------------------------------ | ------ | --------------------------------------------- |
-| Next.js 16 + TypeScript + Tailwind 4 + pnpm                                    | ✅     | `package.json` — exact versions locked        |
-| Folder structure per plan                                                      | ✅     | Matches §10 above                             |
-| `.env.example` with all keys                                                   | ✅     | All 20+ variables documented                  |
-| Supabase clients (browser · server · service-role)                             | ✅     | `src/lib/supabase/`                           |
-| DB migration — 4 tables + RLS + indexes + triggers                             | ✅     | `supabase/migrations/20260501000000_init.sql` |
-| STT adapters (OpenAI · Sarvam · ElevenLabs)                                    | ✅     | Feature-flagged; stubs ready                  |
-| LLM routing + 5 prompts                                                        | ✅     | `src/lib/llm/`                                |
-| Security lib (webhook · ratelimit · sanitize)                                  | ✅     | All attack vectors covered                    |
-| Usage limits + Zod enforcement                                                 | ✅     | Tier caps + 90-min sanity cap                 |
-| Middleware (auth guard + rate limiting)                                        | ✅     | Upload + sign-in routes limited               |
-| ESLint flat config (security + sonarjs)                                        | ✅     | 0 errors/warnings                             |
-| Husky + lint-staged + pre-push test hook                                       | ✅     |                                               |
-| GitHub Actions CI pipeline                                                     | ✅     | 6 jobs → all-green gate                       |
-| Structured logging + PII redaction                                             | ✅     | 34 fields redacted                            |
-| Audit event system (30+ types)                                                 | ✅     | DB-persisted + console                        |
-| Admin dashboard + admin API routes                                             | ✅     | Double auth guard                             |
-| API error standard + Zod error formatter                                       | ✅     |                                               |
-| Error boundaries (error.tsx + global-error.tsx)                                | ✅     |                                               |
-| `manage.sh` — start · stop · restart · install · config · stats · admin · logs | ✅     | Spinner + coloured output                     |
-| Shell unit tests (manage.test.sh)                                              | ✅     | 70 tests                                      |
-| Unit tests — 100% coverage across all 4 metrics                                | ✅     | 223 tests                                     |
-| Security attack tests                                                          | ✅     | 51 scenarios across 2 suites                  |
-| **Red-team security audit + 8 CVE fixes**                                      | ✅     | See §11                                       |
-
-### Session 2 — Landing Page + Auth ✅ Complete
-
-| Deliverable                                           | Status | Notes                            |
-| ----------------------------------------------------- | ------ | -------------------------------- |
-| Landing page (`/`) — hero, pricing table, FAQ, footer | ✅     | `src/app/page.tsx`               |
-| Root layout metadata from `APP_CONFIG`                | ✅     | `src/app/layout.tsx`             |
-| Sign-in page — Google OAuth + magic link              | ✅     | `src/app/auth/sign-in/`          |
-| OAuth callback route (PKCE + safe redirect)           | ✅     | `src/app/auth/callback/route.ts` |
-| Sign-out route (POST + CSRF guard)                    | ✅     | `src/app/auth/sign-out/route.ts` |
-| Authenticated `(app)` layout (server auth guard)      | ✅     | `src/app/(app)/layout.tsx`       |
-| `/notes` empty state + "New Note" stub                | ✅     | `src/app/(app)/notes/page.tsx`   |
-| Hindi landing page (`/hi`)                            | ⏳     | Deferred to Session 2b           |
-| Onboarding language selector                          | ⏳     | Deferred to Session 3            |
-
-### Session 3 — Recorder UI + Upload ✅ Complete
-
-| Deliverable                                                 | Status | Notes                                                     |
-| ----------------------------------------------------------- | ------ | --------------------------------------------------------- |
-| `MediaRecorder` component (webm/opus + Safari mp4 fallback) | ✅     | `src/components/recording/Recorder.tsx`                   |
-| Live waveform (`AnalyserNode`) + timer + pause/resume       | ✅     | `Waveform.tsx` + split useEffect timer fix                |
-| Verbatim / Light / Full intensity radio selector            | ✅     | INTENSITY_LABELS Map + aria-pressed buttons               |
-| Language pill with auto-detect + manual override            | ✅     | LANGUAGES array + select element                          |
-| Hard server-side cap enforcement before upload              | ✅     | `canRecord` + `getNoteDurationLimit` in upload route      |
-| `ffmpeg-wasm` re-encode for blobs > 25MB                    | ✅     | `compressIfNeeded()` lazy-loads @ffmpeg/core at 48kbps    |
-| `/api/upload` route handler                                 | ✅     | Zod validation + storage upload + Inngest event           |
-| Inngest client + `audio/note.uploaded` event firing         | ✅     | `src/lib/inngest/client.ts` + upload route                |
-| `transcribeNote` Inngest function                           | ✅     | `src/lib/inngest/transcribe.ts` (signed URL → STT)        |
-| `cleanupNote` Inngest function                              | ✅     | `src/lib/inngest/cleanup.ts` (LLM routing + usage UPSERT) |
-| `/api/inngest` webhook handler                              | ✅     | `src/app/api/inngest/route.ts`                            |
-| Note detail page with live status polling                   | ✅     | `src/app/(app)/notes/[id]/page.tsx` (3 s poll)            |
-
-### Session 4 — Inngest Pipeline ✅ Complete
-
-| Deliverable                                      | Status | Notes                                                                   |
-| ------------------------------------------------ | ------ | ----------------------------------------------------------------------- |
-| Inngest client + `transcribe.ts` function        | ✅     | `src/lib/inngest/transcribe.ts` — NonRetriableError on 429/404          |
-| `cleanup.ts` function (LLM routing)              | ✅     | `src/lib/inngest/cleanup.ts` — cost cap guard + usage UPSERT            |
-| `/api/inngest` webhook handler                   | ✅     | `src/app/api/inngest/route.ts` — serves 3 functions                     |
-| Supabase Realtime → live status on client        | ✅     | `NoteDetailClient.tsx` — postgres_changes subscription replaces polling |
-| Cost guard: check daily spend cap before queuing | ✅     | `src/lib/cost/cap.ts` — checked in upload route + cleanup function      |
-
-### Session 5 — Notes + Payments + Observability ✅ Complete
-
-| Deliverable                                                 | Status | Notes                                                                 |
-| ----------------------------------------------------------- | ------ | --------------------------------------------------------------------- |
-| Notes list view (cards + status badges)                     | ✅     | `src/app/(app)/notes/page.tsx` — server component, fetches 50 notes   |
-| Single note view (side-by-side transcript ↔ summary)        | ✅     | `NoteDetailClient.tsx` — `md:grid-cols-2` responsive layout           |
-| Edit summary in-place + regenerate with different intensity | ✅     | `POST /api/notes/[id]/regenerate` + intensity buttons in UI           |
-| Razorpay checkout + webhook handler                         | ✅     | `src/app/api/payments/razorpay/` — HMAC-verified, idempotent          |
-| Lemon Squeezy checkout + webhook handler                    | ✅     | `src/app/api/payments/lemonsqueezy/` — sha256= sig, idempotent        |
-| Idempotent `payment_events` inserts                         | ✅     | Unique constraint on `external_event_id` — duplicate 23505 → 200      |
-| PostHog wiring (session replay off on `/notes`)             | ✅     | `PostHogProvider.tsx` — stopSessionRecording on /notes routes         |
-| Sentry error boundary + DSN                                 | ✅     | `sentry.{client,server,edge}.config.ts` — prod-only, no replay        |
-| `cost-digest.ts` cron — daily email via Resend              | ✅     | `src/lib/inngest/cost-digest.ts` — daily 00:00 UTC, emails via Resend |
-| Daily company spend cap ($20) pre-flight check              | ✅     | Checked in upload route + cleanup step; returns 503 when exceeded     |
+All Phase 1 deliverables shipped: project scaffold, landing page, auth, recorder UI, Inngest pipeline, notes CRUD, payments, observability.
 
 ### Session 6 — UX polish, note CRUD, verbatim default ✅ Complete
 
-| Deliverable                                                     | Status | Notes                                                                                 |
-| --------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------- |
-| Fix "Note not found" bug                                        | ✅     | Removed `custom_prompt` from fetchNote SELECT; PGRST116 vs other errors distinguished |
-| QuillCast logo → clickable `<Link href="/">` everywhere         | ✅     | Landing page + app layout                                                             |
-| `UserMenu` component — username + ▾ dropdown with Sign out      | ✅     | Closes on outside click; 7 RTL unit tests; 100% coverage                              |
-| App layout fetches `display_name` and renders `UserMenu`        | ✅     | Username visible on every authenticated page                                          |
-| `DELETE /api/notes/[id]`                                        | ✅     | Removes audio from Storage, then deletes note row; audit logged                       |
-| `PATCH /api/notes/[id]`                                         | ✅     | Updates summary and/or title; `note.updated` audit event                              |
-| `GET /api/notes/[id]/audio`                                     | ✅     | 5-min signed URL; 410 + lazy cleanup on 24 h expiry                                   |
-| Audio expiry countdown timer (client-side)                      | ✅     | 24 h from `ready_at`; amber when < 1 h; updates every second                          |
-| Download audio button                                           | ✅     | In NoteDetailClient; calls audio API; triggers `<a>.click()`                          |
-| Two-step delete confirmation flow                               | ✅     | "Delete this note?" + "Yes, delete" + "Cancel"                                        |
-| Inline summary editing                                          | ✅     | Edit / Save / Cancel toggle; calls PATCH route                                        |
-| Custom prompt sends `intensity: "verbatim"` (not `"light"`)     | ✅     | NoteDetailClient + regenerate route                                                   |
-| Default intensity → `"verbatim"` everywhere                     | ✅     | `Recorder.tsx` initial state + upload route `.default()`                              |
-| `note.updated` audit event type added                           | ✅     | `src/lib/logger/audit.ts`                                                             |
-| `NoteReadyContent` sub-component extracted                      | ✅     | Reduces `NoteDetailClient` cognitive complexity below sonarjs limit                   |
-| `manage.sh`: `timeout 5 docker info` on all 3 checks            | ✅     | No more 10-second hang when Docker Desktop is closed                                  |
-| `manage.sh`: `supabase start` streams live via `tee`            | ✅     | No more silent buffering during container startup                                     |
-| `middleware.ts` → `proxy.ts`; `middleware()` → `proxy()`        | ✅     | Next.js 16 breaking change; deprecation warning eliminated                            |
-| 3-second timeout on `supabase.auth.getUser()` in proxy          | ✅     | Prevents 26-second page hang when Supabase is unreachable                             |
-| `vitest.config.ts` coverage exclusion updated to `src/proxy.ts` | ✅     |                                                                                       |
+| Deliverable                                          | Status | Notes                                                                                 |
+| ---------------------------------------------------- | ------ | ------------------------------------------------------------------------------------- |
+| Fix "Note not found" bug                             | ✅     | Removed `custom_prompt` from fetchNote SELECT; PGRST116 vs other errors distinguished |
+| QuillCast logo → clickable `<Link href="/">`         | ✅     | Landing page + app layout                                                             |
+| `UserMenu` component — username + ▾ dropdown         | ✅     | Closes on outside click; 7 RTL unit tests                                             |
+| App layout fetches `display_name`                    | ✅     | Username visible on every authenticated page                                          |
+| `DELETE /api/notes/[id]`                             | ✅     | Removes audio from Storage, then deletes note row                                     |
+| `PATCH /api/notes/[id]`                              | ✅     | Updates summary and/or title; audit logged                                            |
+| `GET /api/notes/[id]/audio`                          | ✅     | 5-min signed URL; 410 + lazy cleanup on 24 h expiry                                   |
+| Audio expiry countdown timer                         | ✅     | 24 h from `ready_at`; amber < 1 h; updates every second                               |
+| Download audio button                                | ✅     | Calls audio API; triggers `<a>.click()`                                               |
+| Two-step delete confirmation                         | ✅     | "Delete this note?" → "Yes, delete" / "Cancel"                                        |
+| Inline summary editing                               | ✅     | Edit / Save / Cancel toggle; calls PATCH route                                        |
+| Default intensity → `"verbatim"` everywhere          | ✅     | Recorder initial state + upload route default                                         |
+| `note.updated` audit event                           | ✅     | `src/lib/logger/audit.ts`                                                             |
+| `NoteReadyContent` sub-component extracted           | ✅     | Reduces cognitive complexity below sonarjs limit                                      |
+| `middleware.ts` → `proxy.ts`                         | ✅     | Next.js 16 breaking change; deprecation warning gone                                  |
+| 3-second timeout on `supabase.auth.getUser()`        | ✅     | Prevents 26-second hang when Supabase unreachable                                     |
+| `manage.sh`: `timeout 5 docker info`                 | ✅     | Fails fast when Docker Desktop is closed                                              |
+| `manage.sh`: `supabase start` streams live via `tee` | ✅     | Progress visible during container startup                                             |
+
+### Session 7 — Bug fixes, logging, remote Supabase, setup guide ✅ Complete
+
+| Deliverable                       | Status | Notes                                                                                                         |
+| --------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------- |
+| Fix Inngest dev mode skip         | ✅     | Upload route now checks `INNGEST_DEV=1` alongside `INNGEST_EVENT_KEY`                                         |
+| Fix GET 404 masking DB errors     | ✅     | `error.code === "PGRST116"` checked before `!data`; other errors → 500                                        |
+| Fix logger double timestamp       | ✅     | Removed `{time}` from `messageFormat`; pino-pretty prefix is sufficient                                       |
+| Logger file output in dev mode    | ✅     | `buildTransports()` uses `pino.multistream` in both dev and prod; logs always written to `logs/quillcast.log` |
+| `manage.sh`: auto `supabase link` | ✅     | `maybe_supabase_link()` runs `supabase link --project-ref $SUPABASE_PROJECT_REF` on start/stop/restart        |
+| `SUPABASE_PROJECT_REF` env var    | ✅     | Added to `.env.example`, shown in `./manage.sh config`                                                        |
+| Remote Supabase documentation     | ✅     | `CLAUDE.md` updated with remote workflow, Google OAuth steps, auto-link behaviour                             |
+| New upload route tests            | ✅     | 6 tests covering Inngest dev mode, event key, and direct fallback paths                                       |
+| New GET notes tests               | ✅     | 8 tests including 500 for non-PGRST116 DB errors                                                              |
+| `setup.md` created                | ✅     | End-to-end setup guide (prerequisites → DB → OAuth → LLM → deploy)                                            |
 
 ### Phase 2 — Competitive Parity (Weeks 5–10)
 
-_(Detailed breakdown added when Phase 1 ships)_
-
-Key items: iOS/Android via Expo, folders/tags, full-text search, style library, "Write Like Me", native Notion/Obsidian integrations, public API.
+- Expo native iOS + Android apps (reusing TS lib code)
+- Folders, tags, full-text search (`tsvector` + `pg_search`)
+- Custom user prompts (saved per profile)
+- Style library (blog post, LinkedIn, email, journal, meeting notes, SOAP note)
+- "Write Like Me" — Sonnet 4.6, 3–5 writing samples as in-prompt examples
+- "SuperSummary" across notes (Gemini 2.5 Pro, 1M context)
+- Auto language detection pill on recorder
+- UI localisation for 5 languages (next-intl)
+- Native Notion + Obsidian + Apple Notes integrations (no Zapier)
+- Public API + webhooks (Pro tier)
+- Affiliate program (Lemon Squeezy built-in, 30% recurring)
+- Share-as-image generator (canvas, branded watermark on Free)
 
 ### Phase 3 — Differentiation (Weeks 11–24)
 
-_(Detailed breakdown added when Phase 2 ships)_
-
-Key items: WhatsApp bot, RAG "ask your notes", Mac dictation app, on-device Whisper, team plan, Chrome extension.
-
----
-
-## 13. Local Development Setup
-
-### Quick start (use `manage.sh`)
-
-```bash
-./manage.sh install   # checks prereqs, pnpm install, creates .env.local
-./manage.sh start     # shows config (redacted) then starts dev server
-./manage.sh stop      # kills the dev server
-./manage.sh restart   # stop + config + start
-./manage.sh config    # show current config (all secrets redacted)
-./manage.sh status    # is the server running?
-./manage.sh logs      # tail dev logs
-./manage.sh admin     # show admin console URLs + SQL snippet
-./manage.sh help      # list all commands
-```
-
-### Manual setup
-
-```bash
-pnpm install
-cp .env.example .env.local        # fill in keys
-supabase start                    # Docker required
-supabase db push                  # apply migrations
-pnpm dev                          # http://localhost:3000
-```
-
-### Supabase local URLs
-
-| Service  | URL                                                     |
-| -------- | ------------------------------------------------------- |
-| API      | http://localhost:54321                                  |
-| Studio   | http://localhost:54323                                  |
-| Postgres | postgresql://postgres:postgres@localhost:54322/postgres |
-| Storage  | http://localhost:54321/storage/v1                       |
+- WhatsApp bot: voice capture → QuillCast → notes saved to account
+- "Ask your notes" RAG (pgvector, `text-embedding-3-small`)
+- Smart reminders (LLM extracts action items → push)
+- Mac dictation app (Tauri + system-wide hotkey)
+- On-device Whisper mode (`whisper.cpp` WASM, Pro+ Local tier)
+- Team plan ($49/mo flat, shared prompts, admin privacy guarantee)
+- Vertical landing pages: `/for-doctors`, `/for-lawyers`, `/for-students`
+- Chrome extension
+- HIPAA/BAA pathway (after vendor BAAs are signed)
 
 ---
 
-## 14. Coding Standards
+## 14. Production Deployment Checklist
+
+### Required — app will not work without these
+
+| Item                                | Status | Action                                                                                   |
+| ----------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
+| Vercel project created              | ⏳     | [vercel.com](https://vercel.com) → New Project → import GitHub repo                      |
+| `NEXT_PUBLIC_APP_URL`               | ⏳     | Set to `https://<your-app>.vercel.app` (or custom domain) on Vercel                      |
+| Supabase remote credentials         | ✅     | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` |
+| Remote DB migrations applied        | ⏳     | `supabase link --project-ref <ref>` → `./manage.sh db remote`                            |
+| Google OAuth — Supabase Dashboard   | ⏳     | **Authentication → Providers → Google → enable** → paste Client ID + Secret              |
+| Google OAuth — Google Cloud Console | ⏳     | Add `https://<your-app>.vercel.app/auth/callback` to Authorised Redirect URIs            |
+| At least one LLM key                | ✅     | `ANTHROPIC_API_KEY` (recommended) or `OPENAI_API_KEY` or `GOOGLE_GEMINI_API_KEY`         |
+| At least one STT key                | ✅     | `OPENAI_API_KEY` (Whisper) or `GOOGLE_GEMINI_API_KEY` (Gemini STT)                       |
+| `DAILY_COST_CAP_USD`                | ⏳     | Set to a safe limit on Vercel (default 20)                                               |
+
+### Optional — enhances production but not blocking
+
+| Item                            | Status | Action                                                                                                                                                             |
+| ------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Custom domain                   | ⏳     | Vercel → Settings → Domains; update `NEXT_PUBLIC_APP_URL` + Google OAuth redirect URI                                                                              |
+| Inngest production keys         | ⏳     | `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY`; register serve URL in Inngest dashboard; **without these, notes are processed synchronously (slower but functional)** |
+| Razorpay (India payments)       | ⏳     | `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET/PLAN_*`; see `setup.md §8`                                                                                                  |
+| Lemon Squeezy (global payments) | ⏳     | `LEMONSQUEEZY_API_KEY/STORE_ID/WEBHOOK_SECRET/VARIANT_*`; see `setup.md §8`                                                                                        |
+| Sentry error tracking           | ⏳     | `NEXT_PUBLIC_SENTRY_DSN` + `SENTRY_DSN` + `SENTRY_AUTH_TOKEN`                                                                                                      |
+| PostHog analytics               | ⏳     | `NEXT_PUBLIC_POSTHOG_KEY`                                                                                                                                          |
+| Resend email (cost digest)      | ⏳     | `RESEND_API_KEY` + `FROM_EMAIL` + `DIGEST_EMAIL`                                                                                                                   |
+
+### Vercel environment variables — full list
+
+Copy all from your `.env.local` into Vercel → Settings → Environment Variables. Key overrides for production:
+
+```
+NEXT_PUBLIC_APP_URL=https://<your-app>.vercel.app
+NODE_ENV=production
+```
+
+> **Tip:** Use the [Supabase Vercel integration](https://vercel.com/integrations/supabase) to auto-sync `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
+
+### Post-deploy smoke test
+
+After deploying, run through this sequence to verify end-to-end:
+
+1. `pnpm lint && pnpm typecheck` — zero errors
+2. `https://<your-app>.vercel.app` → landing page renders with pricing table
+3. Click **Sign in → Continue with Google** → OAuth completes → redirected to `/notes`
+4. Click **New Note** → recorder loads → record 10 seconds → submit
+5. Note status moves: `pending → transcribing → cleaning → ready` in real time
+6. Notes list shows new card; click it → side-by-side transcript + summary
+7. Click **Regenerate** → choose Full intensity → summary updates
+8. Supabase Dashboard: `notes` table has a row; `audio` bucket has the file; `usage` table has `minutes_used > 0`
+9. Inngest dashboard (if configured): `transcribe` + `cleanup` functions succeeded
+10. Sentry (if configured): no unhandled errors in the session
+
+---
+
+## 15. Local Development Setup
+
+> **Full step-by-step instructions** (prerequisites → DB → OAuth → LLM → start) are in **`setup.md`**.
+
+### Quick start
+
+```bash
+./manage.sh start dev    # shows config, starts Supabase if local, starts Next.js dev
+./manage.sh stop         # graceful shutdown
+./manage.sh restart dev  # stop + start
+./manage.sh logs         # tail logs/quillcast.log with colour
+./manage.sh status       # PID, URL, admin link
+./manage.sh config       # print all env vars (secrets redacted)
+./manage.sh admin        # admin URL + grant-access SQL
+./manage.sh help         # full command reference
+```
+
+### Database commands
+
+```bash
+./manage.sh db start    # start local Docker stack + apply migrations
+./manage.sh db stop     # stop local stack (data preserved in volume)
+./manage.sh db push     # apply pending migrations to local DB
+./manage.sh db remote   # apply pending migrations to linked remote project
+./manage.sh db reset    # drop + recreate local DB (destructive)
+./manage.sh db status   # check if local stack is running
+```
+
+### Local Supabase URLs
+
+| Service         | URL                                                       |
+| --------------- | --------------------------------------------------------- |
+| API / Auth      | `http://127.0.0.1:54321`                                  |
+| Supabase Studio | `http://localhost:54323`                                  |
+| DB (psql)       | `postgresql://postgres:postgres@localhost:54322/postgres` |
+| Inbucket        | `http://localhost:54324`                                  |
+| Inngest UI      | `http://localhost:8288` (when dev server is running)      |
+
+### Running tests
+
+```bash
+pnpm test              # unit + coverage (must stay 100%)
+pnpm test:coverage     # explicit coverage report
+pnpm test:security     # attack simulation suite
+pnpm test:e2e          # Playwright (requires server running)
+bash tests/shell/manage.test.sh   # shell unit tests (70 cases)
+```
+
+---
+
+## 16. Coding Standards
 
 ### TypeScript
 
@@ -740,7 +787,9 @@ pnpm dev                          # http://localhost:3000
 - Zod for all API inputs, webhook payloads, env validation
 - All route handlers must have explicit `Promise<Response>` return types
 
-### React / Next.js (read `node_modules/next/dist/docs/` before writing Next.js code)
+### React / Next.js
+
+> Read `node_modules/next/dist/docs/` before writing Next.js code — this version (16.x) has breaking changes.
 
 - Server components by default; `"use client"` only for state/refs/effects/browser APIs
 - DB access only in server components, server actions, or route handlers
@@ -765,35 +814,4 @@ pnpm dev                          # http://localhost:3000
 - Types: `feat` `fix` `chore` `test` `docs` `security` `refactor`
 - Commit after every meaningful unit — never batch unrelated changes
 - Always push immediately: `git push -u origin claude/review-project-setup-dapqK`
-
----
-
-## 15. How to Start the Application (full detail)
-
-```bash
-# ── Prerequisites (one-time) ───────────────────────────────────────
-nvm install 22 && nvm use 22       # Node 22 LTS
-npm i -g pnpm                      # pnpm 10
-# Docker Desktop must be running for Supabase local
-
-# ── Install and configure ─────────────────────────────────────────
-./manage.sh install                # or: pnpm install && cp .env.example .env.local
-
-# ── Supabase (Docker required) ────────────────────────────────────
-supabase start                     # prints keys → copy to .env.local
-supabase db push                   # apply migrations
-
-# ── Run ──────────────────────────────────────────────────────────
-./manage.sh start                  # or: pnpm dev
-
-# ── Test ─────────────────────────────────────────────────────────
-pnpm test              # unit + security
-pnpm test:coverage     # must stay at 100%
-pnpm test:security     # attack simulations only
-bash tests/shell/manage.test.sh    # shell unit tests
-pnpm test:e2e          # Playwright (requires server running)
-
-# ── Stop ─────────────────────────────────────────────────────────
-./manage.sh stop
-supabase stop          # keeps data
-```
+- Run `pnpm lint && pnpm typecheck` before every commit

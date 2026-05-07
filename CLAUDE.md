@@ -51,8 +51,7 @@
 
 - At the start of each new session, read this file (`CLAUDE.md`) and `IMPLEMENTATION.md` to understand current phase and what's been built.
 - Check CI status for PR #1 first thing — if failing, fix before anything else.
-- The active plan is in `/root/.claude/plans/read-claude-md-http-claude-md-to-underst-zazzy-lighthouse.md`.
-  Sessions follow the 5-session MVP plan. Check `IMPLEMENTATION.md` to see which sessions are complete.
+- `IMPLEMENTATION.md` is the single source of truth for architecture, progress, and production checklist. `PLAN.md` has been merged into it and deleted.
 
 ## Key file locations
 
