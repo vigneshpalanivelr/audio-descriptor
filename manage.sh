@@ -313,6 +313,13 @@ supabase_is_running() {
   nc -z 127.0.0.1 "$SUPABASE_API_PORT" 2>/dev/null
 }
 
+# Returns 0 (true) when NEXT_PUBLIC_SUPABASE_URL is a remote Supabase host.
+# Local URLs are 127.x or localhost; anything else is treated as remote.
+is_remote_supabase() {
+  local url="${NEXT_PUBLIC_SUPABASE_URL:-}"
+  [[ -n "$url" ]] && [[ ! "$url" =~ ^https?://(127\.|localhost) ]]
+}
+
 # Set KEY=VALUE in .env.local only when the current value is absent or empty.
 env_set_if_empty() {
   local key="$1" val="$2" file="${3:-.env.local}"
@@ -361,6 +368,14 @@ supabase_do_push() {
 # applies pending migrations. Soft-fails with a warning when automation is not
 # possible (e.g. non-macOS without package manager) so dev/start still proceed.
 ensure_supabase() {
+  if is_remote_supabase; then
+    info "Remote Supabase detected → ${BC}${NEXT_PUBLIC_SUPABASE_URL}${RST}"
+    info "Skipping local Docker stack."
+    warn "To apply pending migrations to your remote project:"
+    info "  Run ${BD}supabase link --project-ref <ref>${RST} once, then ${BD}./manage.sh db remote${RST}"
+    return 0
+  fi
+
   ensure_supabase_cli || { warn "Supabase CLI unavailable — skipping local DB setup"; return 0; }
   ensure_docker_running || { warn "Docker unavailable — skipping local DB setup"; return 0; }
 
@@ -380,6 +395,12 @@ cmd_db() {
   case "$sub" in
     start)
       header "🗄  Supabase — start"
+      if is_remote_supabase; then
+        info "Remote Supabase detected → ${BC}${NEXT_PUBLIC_SUPABASE_URL}${RST}"
+        info "Use ${BD}./manage.sh db remote${RST} to push migrations to your remote project."
+        echo ""
+        exit 0
+      fi
       if ! command -v supabase >/dev/null 2>&1; then
         error "supabase CLI not found. Install: brew install supabase/tap/supabase"
         exit 1

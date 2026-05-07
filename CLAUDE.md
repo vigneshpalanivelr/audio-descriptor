@@ -82,11 +82,16 @@
 ## Critical known behaviours
 
 - **Local Supabase data is ephemeral**: data lives in Docker volumes. If Docker Desktop
-  restarts, volumes are pruned (`docker system prune -v`), or `supabase stop --no-backup`
-  is run, **all local data is permanently lost**. For persistent storage, link a remote
-  Supabase project (`supabase link`) and use `.env.local` keys from the remote project.
-  The `is_pinned` migration `20260503000000_pinned.sql` must be applied with
-  `./manage.sh db push` after any fresh Supabase start.
+  restarts, volumes are pruned (`docker system prune -v`), or Docker recreates containers,
+  **all local data is permanently lost**. For persistent storage use a remote Supabase
+  project: set `NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co` in `.env.local` with
+  the remote anon/service-role keys. `manage.sh` detects a non-localhost URL and skips
+  local Docker automatically.
+- **Remote Supabase migration workflow**: `supabase db push` only targets the local Docker
+  instance. To push migrations to a remote project: `supabase link --project-ref <ref>`
+  (once), then `./manage.sh db remote` (runs `supabase migration up`). The `is_pinned`
+  migration `20260503000000_pinned.sql` must be applied to any remote project where the
+  feature is used.
 - **Inngest dev mode vs event key**: `INNGEST_EVENT_KEY` is required for **production**
   Inngest. For **local dev** with `npx inngest-cli@latest dev` running on :8288,
   `manage.sh` sets `INNGEST_DEV=1` — no event key is needed. The upload route checks
