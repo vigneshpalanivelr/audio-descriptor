@@ -88,10 +88,19 @@
   the remote anon/service-role keys. `manage.sh` detects a non-localhost URL and skips
   local Docker automatically.
 - **Remote Supabase migration workflow**: `supabase db push` only targets the local Docker
-  instance. To push migrations to a remote project: `supabase link --project-ref <ref>`
-  (once), then `./manage.sh db remote` (runs `supabase migration up`). The `is_pinned`
-  migration `20260503000000_pinned.sql` must be applied to any remote project where the
-  feature is used.
+  instance. To push migrations to a remote project: set `SUPABASE_PROJECT_REF=<ref>` in
+  `.env.local` (manage.sh will auto-link on start/stop), then run `./manage.sh db remote`
+  (runs `supabase migration up`). The `is_pinned` migration `20260503000000_pinned.sql`
+  must be applied to any remote project where the feature is used.
+- **Auto supabase link**: when `SUPABASE_PROJECT_REF` is set in `.env.local` and the URL
+  is remote, `manage.sh` automatically runs `supabase link --project-ref <ref>` during
+  `start`, `stop`, and `restart` so the CLI always targets the correct remote project.
+- **Google OAuth setup**: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env.local`
+  are NOT used by the app directly. Google OAuth is configured entirely in the Supabase
+  Dashboard: Authentication → Providers → Google → enable → paste Client ID + Secret.
+  The error `"Unsupported provider: provider is not enabled"` means this Dashboard step
+  was not completed. The redirect URI to register in the Google Cloud Console is:
+  `https://<project-ref>.supabase.co/auth/v1/callback`.
 - **Inngest dev mode vs event key**: `INNGEST_EVENT_KEY` is required for **production**
   Inngest. For **local dev** with `npx inngest-cli@latest dev` running on :8288,
   `manage.sh` sets `INNGEST_DEV=1` — no event key is needed. The upload route checks

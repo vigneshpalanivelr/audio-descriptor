@@ -254,6 +254,7 @@ show_config() {
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_URL"     "${NEXT_PUBLIC_SUPABASE_URL:-(not set)}"
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY" "$(redact "${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}")"
   printf "    ${DIM}%-36s${RST} %b\n" "SUPABASE_SERVICE_ROLE_KEY"    "$(redact "${SUPABASE_SERVICE_ROLE_KEY:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "SUPABASE_PROJECT_REF"         "${SUPABASE_PROJECT_REF:-(not set)}"
 
   echo ""
   echo "  ${BD}OAuth${RST}"
@@ -320,6 +321,22 @@ is_remote_supabase() {
   [[ -n "$url" ]] && [[ ! "$url" =~ ^https?://(127\.|localhost) ]]
 }
 
+# Auto-link the Supabase CLI to the remote project when SUPABASE_PROJECT_REF is set.
+maybe_supabase_link() {
+  local ref="${SUPABASE_PROJECT_REF:-}"
+  [[ -z "$ref" ]] && return 0
+  if ! command -v supabase >/dev/null 2>&1; then
+    warn "supabase CLI not found — skipping auto-link for project ${BD}${ref}${RST}"
+    return 0
+  fi
+  info "Auto-linking Supabase project ${BD}${ref}${RST}…"
+  if supabase link --project-ref "$ref" 2>&1 | colorize_output; then
+    success "Supabase project linked: ${BD}${ref}${RST}"
+  else
+    warn "supabase link failed — run manually: ${BD}supabase link --project-ref ${ref}${RST}"
+  fi
+}
+
 # Set KEY=VALUE in .env.local only when the current value is absent or empty.
 env_set_if_empty() {
   local key="$1" val="$2" file="${3:-.env.local}"
@@ -371,8 +388,7 @@ ensure_supabase() {
   if is_remote_supabase; then
     info "Remote Supabase detected → ${BC}${NEXT_PUBLIC_SUPABASE_URL}${RST}"
     info "Skipping local Docker stack."
-    warn "To apply pending migrations to your remote project:"
-    info "  Run ${BD}supabase link --project-ref <ref>${RST} once, then ${BD}./manage.sh db remote${RST}"
+    maybe_supabase_link
     return 0
   fi
 

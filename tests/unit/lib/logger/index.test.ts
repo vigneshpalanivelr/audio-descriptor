@@ -37,10 +37,10 @@ describe("logger — production transport", () => {
     vi.unstubAllEnvs()
   })
 
-  it("does not call pino.multistream when NODE_ENV is development", async () => {
+  it("calls pino.multistream when NODE_ENV is development", async () => {
     vi.stubEnv("NODE_ENV", "development")
     await import("@/lib/logger/index")
-    expect(multistreamMock).not.toHaveBeenCalled()
+    expect(multistreamMock).toHaveBeenCalledOnce()
     vi.unstubAllEnvs()
   })
 

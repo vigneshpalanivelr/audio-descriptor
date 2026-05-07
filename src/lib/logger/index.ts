@@ -37,19 +37,6 @@ const isDev = process.env["NODE_ENV"] !== "production"
 const logDir = path.resolve(process.cwd(), "logs")
 
 function buildTransports(): pino.DestinationStream {
-  if (isDev) {
-    return pino.transport({
-      target: "pino-pretty",
-      options: {
-        colorize: true,
-        translateTime: "SYS:yyyy-mm-dd HH:MM:ss",
-        ignore: "pid,hostname",
-        messageFormat: "{time} [{module}] {msg}",
-      },
-    })
-  }
-
-  /* c8 ignore start */
   const fileStream = createStream({
     filename: "quillcast.log",
     path: logDir,
@@ -58,6 +45,23 @@ function buildTransports(): pino.DestinationStream {
     maxSize: "100M",
   })
 
+  if (isDev) {
+    const prettyStream = pino.transport({
+      target: "pino-pretty",
+      options: {
+        colorize: true,
+        translateTime: "SYS:yyyy-mm-dd HH:MM:ss",
+        ignore: "pid,hostname",
+        messageFormat: "[{module}] {msg}",
+      },
+    })
+    return pino.multistream([
+      { stream: prettyStream, level: "debug" },
+      { stream: fileStream, level: "debug" },
+    ])
+  }
+
+  /* c8 ignore start */
   return pino.multistream([
     { stream: process.stdout, level: "info" },
     { stream: fileStream, level: "debug" },
