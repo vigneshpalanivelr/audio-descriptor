@@ -36,7 +36,9 @@ interface InngestPayload {
 }
 
 async function sendToInngest(payload: InngestPayload): Promise<boolean> {
-  if (!process.env["INNGEST_EVENT_KEY"]) {
+  const hasEventKey = !!process.env["INNGEST_EVENT_KEY"]
+  const isDevMode = process.env["INNGEST_DEV"] === "1"
+  if (!hasEventKey && !isDevMode) {
     appLogger.debug({ noteId: payload.noteId }, "upload:inngest_skipped_no_key")
     return false
   }

@@ -398,6 +398,9 @@ cmd_db() {
 
     stop)
       header "🗄  Supabase — stop"
+      warn "Stopping Supabase preserves the local DB in its Docker volume."
+      warn "However, if Docker Desktop restarts or volumes are pruned, ${BR}all local data will be lost${RST}${BY}."
+      info "For persistent data use a remote Supabase project: ${BD}supabase link${RST}"
       run_cmd "Stop Supabase" supabase stop
       ;;
 

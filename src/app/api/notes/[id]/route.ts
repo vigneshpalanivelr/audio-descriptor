@@ -46,10 +46,11 @@ export async function GET(_request: NextRequest, { params }: RouteParams): Promi
         .limit(20),
     ])
 
-    if (noteResult.error?.code === "PGRST116" || !noteResult.data) {
-      return API_ERRORS.notFound("Note")
+    if (noteResult.error) {
+      if (noteResult.error.code === "PGRST116") return API_ERRORS.notFound("Note")
+      return API_ERRORS.internalError()
     }
-    if (noteResult.error) return API_ERRORS.internalError()
+    if (!noteResult.data) return API_ERRORS.notFound("Note")
 
     return Response.json({ note: noteResult.data, versions: versionsResult.data ?? [] })
   } catch (err) {

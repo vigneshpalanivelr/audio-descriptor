@@ -62,6 +62,7 @@
 | Environment template        | `.env.example`                                         |
 | DB migration v1             | `supabase/migrations/20260501000000_init.sql`          |
 | DB migration v2             | `supabase/migrations/20260502000000_note_versions.sql` |
+| DB migration v3             | `supabase/migrations/20260503000000_pinned.sql`        |
 | Auth proxy (Next.js 16)     | `src/proxy.ts`                                         |
 | STT routing                 | `src/lib/stt/route.ts`                                 |
 | LLM routing                 | `src/lib/llm/route.ts`                                 |
@@ -80,6 +81,20 @@
 
 ## Critical known behaviours
 
+- **Local Supabase data is ephemeral**: data lives in Docker volumes. If Docker Desktop
+  restarts, volumes are pruned (`docker system prune -v`), or `supabase stop --no-backup`
+  is run, **all local data is permanently lost**. For persistent storage, link a remote
+  Supabase project (`supabase link`) and use `.env.local` keys from the remote project.
+  The `is_pinned` migration `20260503000000_pinned.sql` must be applied with
+  `./manage.sh db push` after any fresh Supabase start.
+- **Inngest dev mode vs event key**: `INNGEST_EVENT_KEY` is required for **production**
+  Inngest. For **local dev** with `npx inngest-cli@latest dev` running on :8288,
+  `manage.sh` sets `INNGEST_DEV=1` — no event key is needed. The upload route checks
+  both (`hasEventKey || isDevMode`) before sending to Inngest; if neither is set it falls
+  back to `processNoteDirectly` (in-process, synchronous transcription).
+- **GET /api/notes/[id] error handling**: non-PGRST116 database errors return 500
+  (not 404). Previously any null data returned 404, masking schema errors — fixed to
+  check `error.code` first.
 - **Next.js 16** uses `src/proxy.ts` (not `middleware.ts`) with `export function proxy`.
   File was renamed; `export function middleware` no longer works.
 - **`custom_prompt` column** on the `notes` table only exists after migration
