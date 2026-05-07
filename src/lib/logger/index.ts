@@ -36,23 +36,7 @@ const REDACTED_PATHS = [
 const isDev = process.env["NODE_ENV"] !== "production"
 const logDir = path.resolve(process.cwd(), "logs")
 
-function buildTransports() {
-  /* c8 ignore start */
-  if (isDev) {
-    // Dev: pretty-print to stdout only — only called in production, so can't be unit-tested
-    return {
-      target: "pino-pretty",
-      options: {
-        colorize: true,
-        translateTime: "SYS:yyyy-mm-dd HH:MM:ss",
-        ignore: "pid,hostname",
-        messageFormat: "[{module}] {msg}",
-      },
-    }
-  }
-  /* c8 ignore stop */
-
-  // Production: JSON to stdout + rotating file
+function buildTransports(): pino.DestinationStream {
   const fileStream = createStream({
     filename: "quillcast.log",
     path: logDir,
@@ -61,10 +45,28 @@ function buildTransports() {
     maxSize: "100M",
   })
 
+  if (isDev) {
+    const prettyStream = pino.transport({
+      target: "pino-pretty",
+      options: {
+        colorize: true,
+        translateTime: "SYS:yyyy-mm-dd HH:MM:ss",
+        ignore: "pid,hostname",
+        messageFormat: "[{module}] {msg}",
+      },
+    })
+    return pino.multistream([
+      { stream: prettyStream, level: "debug" },
+      { stream: fileStream, level: "debug" },
+    ])
+  }
+
+  /* c8 ignore start */
   return pino.multistream([
     { stream: process.stdout, level: "info" },
     { stream: fileStream, level: "debug" },
   ])
+  /* c8 ignore stop */
 }
 
 const logger = pino(
@@ -87,7 +89,7 @@ const logger = pino(
       /* c8 ignore next */ env: process.env["NODE_ENV"] ?? "development",
     },
   },
-  isDev ? undefined : (buildTransports() as pino.DestinationStream),
+  buildTransports(),
 )
 
 // Child loggers per module — keeps logs filterable by module name

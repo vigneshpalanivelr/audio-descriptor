@@ -1,0 +1,33 @@
+import { GoogleGenerativeAI } from "@google/generative-ai"
+import type { TranscribeRequest, TranscribeResult } from "./types"
+
+const genAI = new GoogleGenerativeAI(process.env["GOOGLE_GEMINI_API_KEY"] ?? "")
+
+// Override via GEMINI_STT_MODEL in .env.local if the default is unavailable on your key
+const STT_MODEL = process.env["GEMINI_STT_MODEL"] ?? "gemini-2.5-flash"
+
+export async function transcribeWithGemini(request: TranscribeRequest): Promise<TranscribeResult> {
+  const model = genAI.getGenerativeModel({ model: STT_MODEL })
+
+  const audioResponse = await fetch(request.audioUrl)
+  const audioBuffer = await audioResponse.arrayBuffer()
+  const base64Audio = Buffer.from(audioBuffer).toString("base64")
+
+  const mimeType = request.audioUrl.includes(".mp4") ? "audio/mp4" : "audio/webm"
+
+  const langHint = request.language ? ` The recording is in ${request.language}.` : ""
+  const prompt = `Transcribe this audio recording verbatim.${langHint} Return only the transcription text, no headings or commentary.`
+
+  const result = await model.generateContent([
+    { inlineData: { data: base64Audio, mimeType } },
+    prompt,
+  ])
+
+  return {
+    transcript: result.response.text().trim(),
+    detectedLanguage: request.language ?? "en",
+    durationSeconds: 0,
+    engine: `gemini:${STT_MODEL}`,
+    costUsd: 0,
+  }
+}

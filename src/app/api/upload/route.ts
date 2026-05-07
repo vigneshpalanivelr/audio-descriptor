@@ -9,6 +9,10 @@ import {
 } from "@/lib/security/sanitize"
 import { canRecord, getNoteDurationLimit } from "@/lib/usage/limits"
 import { API_ERRORS, handleRouteError } from "@/lib/api/error"
+import { inngest } from "@/lib/inngest/client"
+import { appLogger } from "@/lib/logger"
+import { parseCostCap, isCostCapExceeded } from "@/lib/cost/cap"
+import { processNoteDirectly } from "@/lib/note-processor"
 import type { UserTier } from "@/types"
 
 const uploadMetaSchema = z.object({
@@ -18,16 +22,63 @@ const uploadMetaSchema = z.object({
     // eslint-disable-next-line security/detect-unsafe-regex -- fixed-length quantifiers only; provably safe
     .regex(/^[a-z]{2,3}(-[A-Z]{2,3})?$/)
     .default("en"),
-  intensity: z.enum(["verbatim", "light", "full"]).default("light"),
+  intensity: z.enum(["verbatim", "light", "full"]).default("verbatim"),
 })
+
+interface InngestPayload {
+  noteId: string
+  userId: string
+  storagePath: string
+  durationSec: number
+  language: string
+  intensity: "verbatim" | "light" | "full"
+  tier: string
+}
+
+async function sendToInngest(payload: InngestPayload): Promise<boolean> {
+  const hasEventKey = !!process.env["INNGEST_EVENT_KEY"]
+  const isDevMode = process.env["INNGEST_DEV"] === "1"
+  if (!hasEventKey && !isDevMode) {
+    appLogger.debug({ noteId: payload.noteId }, "upload:inngest_skipped_no_key")
+    return false
+  }
+  try {
+    await inngest.send({ name: "audio/note.uploaded", data: payload })
+    return true
+  } catch (err) {
+    appLogger.warn({ err, noteId: payload.noteId }, "upload:inngest_send_failed")
+    return false
+  }
+}
+
+function runDirectProcessing(payload: InngestPayload): void {
+  processNoteDirectly(payload).catch((err) =>
+    appLogger.error({ err, noteId: payload.noteId }, "upload:direct_process_failed"),
+  )
+}
 
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7)
 }
 
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
 function resolveMaxSize(tier: UserTier): number {
   if (tier === "pro" || tier === "pro_plus_local") return MAX_AUDIO_SIZE_PRO
   return MAX_AUDIO_SIZE_FREE
+}
+
+async function getDailySpendUsd(
+  serviceClient: ReturnType<typeof createServiceClient>,
+): Promise<number> {
+  const { data } = await serviceClient
+    .from("notes")
+    .select("cost_usd")
+    .gte("ready_at", `${today()}T00:00:00.000Z`)
+    .not("cost_usd", "is", null)
+  return (data ?? []).reduce((sum, row) => sum + ((row.cost_usd as number) ?? 0), 0)
 }
 
 export async function POST(request: NextRequest) {
@@ -57,7 +108,7 @@ export async function POST(request: NextRequest) {
 
     const serviceClient = createServiceClient()
 
-    const [profileResult, usageResult] = await Promise.all([
+    const [profileResult, usageResult, dailySpend] = await Promise.all([
       serviceClient.from("profiles").select("tier").eq("id", user.id).single(),
       serviceClient
         .from("usage")
@@ -65,7 +116,13 @@ export async function POST(request: NextRequest) {
         .eq("user_id", user.id)
         .eq("month", currentMonth())
         .maybeSingle(),
+      getDailySpendUsd(serviceClient),
     ])
+
+    if (isCostCapExceeded(dailySpend, parseCostCap())) {
+      appLogger.warn({ dailySpend }, "upload:daily_cost_cap_exceeded")
+      return API_ERRORS.serviceUnavailable("Daily processing limit reached — try again tomorrow")
+    }
 
     const tier = ((profileResult.data?.tier as UserTier | undefined) ?? "free") satisfies UserTier
     const minutesUsed = (usageResult.data?.minutes_used as number | undefined) ?? 0
@@ -108,11 +165,26 @@ export async function POST(request: NextRequest) {
       .upload(storagePath, arrayBuffer, { contentType: resolvedMime, upsert: false })
 
     if (storageErr) {
+      appLogger.error({ err: storageErr, storagePath }, "upload:storage_write_failed")
       await serviceClient.from("notes").delete().eq("id", note.id)
       return API_ERRORS.internalError()
     }
 
     await serviceClient.from("notes").update({ audio_storage_path: storagePath }).eq("id", note.id)
+
+    const inngestPayload = {
+      noteId: note.id as string,
+      userId: user.id,
+      storagePath,
+      durationSec: meta.durationSec,
+      language: meta.language,
+      intensity: meta.intensity,
+      tier,
+    }
+    const sentToInngest = await sendToInngest(inngestPayload)
+    if (!sentToInngest) {
+      runDirectProcessing(inngestPayload)
+    }
 
     return Response.json({ noteId: note.id }, { status: 201 })
   } catch (err) {

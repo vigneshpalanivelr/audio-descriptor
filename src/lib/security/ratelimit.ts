@@ -42,4 +42,6 @@ export const RATE_LIMITS = {
   signIn: { maxRequests: 5, windowMs: 60_000 } satisfies RateLimitConfig,
   signup: { maxRequests: 3, windowMs: 3_600_000 } satisfies RateLimitConfig,
   webhook: { maxRequests: 100, windowMs: 60_000 } satisfies RateLimitConfig,
+  regenerate: { maxRequests: 5, windowMs: 60_000 } satisfies RateLimitConfig,
+  checkout: { maxRequests: 3, windowMs: 60_000 } satisfies RateLimitConfig,
 } as const

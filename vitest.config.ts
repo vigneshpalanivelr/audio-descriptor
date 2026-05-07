@@ -23,21 +23,24 @@ export default defineConfig({
         "src/app/**",
         // shadcn/ui generated components
         "src/components/ui/**",
-        // Browser-API-heavy recording components — tested via E2E
+        // Browser-API-heavy components — tested via E2E
         "src/components/recording/**",
+        "src/components/providers/**",
         // Infrastructure clients — thin wrappers, no logic to test
         "src/lib/supabase/**",
         // STT adapter implementations — tested indirectly via route mocks
         "src/lib/stt/openai.ts",
         "src/lib/stt/sarvam.ts",
         "src/lib/stt/elevenlabs.ts",
+        "src/lib/stt/gemini.ts",
         "src/lib/stt/types.ts",
-        // Next.js middleware — tested via E2E; auth flow depends on real Supabase
-        "src/middleware.ts",
+        // Next.js proxy — tested via E2E; auth flow depends on real Supabase
+        "src/proxy.ts",
         // Static config — no logic
         "src/config/**",
-        // Inngest client instantiation
-        "src/inngest/client.ts",
+        // Inngest job functions — require Inngest runtime; tested via E2E/integration
+        "src/lib/inngest/**",
+        "src/inngest/**",
         "**/*.d.ts",
         "src/types/**",
         "*.config.*",

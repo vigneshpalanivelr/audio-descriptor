@@ -18,6 +18,7 @@ const CSP = [
     "https://api.elevenlabs.io",
     "https://app.posthog.com",
     "https://*.sentry.io",
+    "https://unpkg.com",
   ].join(" "),
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -39,12 +40,22 @@ const securityHeaders = [
   { key: "Content-Security-Policy", value: CSP },
 ]
 
+// ffmpeg-wasm requires SharedArrayBuffer which needs COOP + COEP headers
+const coopCoepHeaders = [
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+]
+
 const nextConfig: NextConfig = {
   async headers() {
     return [
       {
         source: "/(.*)",
         headers: securityHeaders,
+      },
+      {
+        source: "/notes/new",
+        headers: coopCoepHeaders,
       },
     ]
   },

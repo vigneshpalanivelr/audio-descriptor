@@ -9,10 +9,12 @@ const pinoInstance = {
   error: vi.fn(),
 }
 const multistreamMock = vi.fn(() => ({}))
+const transportMock = vi.fn(() => ({}))
 const pinoMock = Object.assign(
   vi.fn(() => pinoInstance),
   {
     multistream: multistreamMock,
+    transport: transportMock,
     stdTimeFunctions: { isoTime: vi.fn() },
   },
 )
@@ -21,9 +23,11 @@ vi.mock("pino-rotating-file-stream", () => ({ default: vi.fn(() => ({})) }))
 
 describe("logger — production transport", () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.resetModules()
     pinoMock.mockClear()
     multistreamMock.mockClear()
+    transportMock.mockClear()
   })
 
   it("calls pino.multistream when NODE_ENV is production", async () => {
@@ -33,19 +37,29 @@ describe("logger — production transport", () => {
     vi.unstubAllEnvs()
   })
 
-  it("does not call pino.multistream when NODE_ENV is development", async () => {
+  it("calls pino.multistream when NODE_ENV is development", async () => {
     vi.stubEnv("NODE_ENV", "development")
     await import("@/lib/logger/index")
-    expect(multistreamMock).not.toHaveBeenCalled()
+    expect(multistreamMock).toHaveBeenCalledOnce()
+    vi.unstubAllEnvs()
+  })
+
+  it("calls pino.transport with pino-pretty when NODE_ENV is development", async () => {
+    vi.stubEnv("NODE_ENV", "development")
+    await import("@/lib/logger/index")
+    expect(transportMock).toHaveBeenCalledOnce()
+    expect(transportMock).toHaveBeenCalledWith(expect.objectContaining({ target: "pino-pretty" }))
     vi.unstubAllEnvs()
   })
 })
 
 describe("logger — PII redaction config", () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.resetModules()
     pinoMock.mockClear()
     multistreamMock.mockClear()
+    transportMock.mockClear()
   })
 
   async function getRedactedPaths(): Promise<string[]> {

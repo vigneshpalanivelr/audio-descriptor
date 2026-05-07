@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
+import { safeGetUser } from "@/lib/supabase/safe-auth"
 import { APP_CONFIG } from "@/config/app"
 
 // IST offset helper — used for display only
@@ -48,11 +49,8 @@ interface AdminStats {
 async function fetchAdminStats(): Promise<AdminStats | null> {
   try {
     const base = process.env["NEXT_PUBLIC_APP_URL"] ?? "http://localhost:3000"
-    // Use getUser() (re-validates JWT with Supabase) rather than getSession() (cached)
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const user = await safeGetUser(supabase)
     if (!user) return null
 
     const { cookies } = await import("next/headers")
@@ -74,9 +72,7 @@ async function fetchAdminStats(): Promise<AdminStats | null> {
 
 export default async function AdminPage() {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await safeGetUser(supabase)
 
   if (!user) redirect("/auth/sign-in")
 

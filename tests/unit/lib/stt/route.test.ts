@@ -14,10 +14,12 @@ const sarvamMock = vi
   .fn()
   .mockResolvedValue({ ...STUB_RESULT, detectedLanguage: "hi", engine: "sarvam" })
 const elevenLabsMock = vi.fn().mockResolvedValue({ ...STUB_RESULT, engine: "elevenlabs" })
+const geminiMock = vi.fn().mockResolvedValue({ ...STUB_RESULT, engine: "gemini" })
 
 vi.mock("@/lib/stt/openai", () => ({ transcribeWithOpenAI: openaiMock }))
 vi.mock("@/lib/stt/sarvam", () => ({ transcribeWithSarvam: sarvamMock }))
 vi.mock("@/lib/stt/elevenlabs", () => ({ transcribeWithElevenLabs: elevenLabsMock }))
+vi.mock("@/lib/stt/gemini", () => ({ transcribeWithGemini: geminiMock }))
 
 const BASE_REQUEST: TranscribeRequest = {
   audioUrl: "https://storage.example.com/audio/test.webm",
@@ -26,13 +28,15 @@ const BASE_REQUEST: TranscribeRequest = {
   userId: "user-001",
 }
 
-describe("routeTranscription — default (OpenAI)", () => {
+describe("routeTranscription — OpenAI (key present)", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
     vi.stubEnv("ENABLE_SARVAM", "false")
     vi.stubEnv("ENABLE_ELEVENLABS", "false")
     vi.stubEnv("ELEVENLABS_PREMIUM", "false")
+    vi.stubEnv("OPENAI_API_KEY", "sk-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
   })
 
   it("routes to OpenAI for English by default", async () => {
@@ -56,6 +60,50 @@ describe("routeTranscription — default (OpenAI)", () => {
   })
 })
 
+describe("routeTranscription — Gemini fallback (no OpenAI key)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("ENABLE_SARVAM", "false")
+    vi.stubEnv("ENABLE_ELEVENLABS", "false")
+    vi.stubEnv("ELEVENLABS_PREMIUM", "false")
+    vi.stubEnv("OPENAI_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "gemini-key")
+  })
+
+  it("falls back to Gemini when OPENAI_API_KEY is absent", async () => {
+    const { routeTranscription } = await import("@/lib/stt/route")
+    await routeTranscription(BASE_REQUEST)
+    expect(geminiMock).toHaveBeenCalledOnce()
+    expect(openaiMock).not.toHaveBeenCalled()
+  })
+
+  it("still uses Sarvam for Indian language even with no OpenAI key", async () => {
+    vi.stubEnv("ENABLE_SARVAM", "true")
+    const { routeTranscription } = await import("@/lib/stt/route")
+    await routeTranscription({ ...BASE_REQUEST, language: "hi" })
+    expect(sarvamMock).toHaveBeenCalledOnce()
+    expect(geminiMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("routeTranscription — no provider configured", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    vi.stubEnv("ENABLE_SARVAM", "false")
+    vi.stubEnv("ENABLE_ELEVENLABS", "false")
+    vi.stubEnv("ELEVENLABS_PREMIUM", "false")
+    vi.stubEnv("OPENAI_API_KEY", "")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
+  })
+
+  it("throws when no STT provider key is set", async () => {
+    const { routeTranscription } = await import("@/lib/stt/route")
+    await expect(routeTranscription(BASE_REQUEST)).rejects.toThrow("No STT provider configured")
+  })
+})
+
 describe("routeTranscription — Sarvam enabled", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -63,6 +111,8 @@ describe("routeTranscription — Sarvam enabled", () => {
     vi.stubEnv("ENABLE_SARVAM", "true")
     vi.stubEnv("ENABLE_ELEVENLABS", "false")
     vi.stubEnv("ELEVENLABS_PREMIUM", "false")
+    vi.stubEnv("OPENAI_API_KEY", "sk-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
   })
 
   it("routes Hindi to Sarvam when enabled", async () => {
@@ -99,6 +149,8 @@ describe("routeTranscription — ElevenLabs premium override", () => {
     vi.stubEnv("ENABLE_SARVAM", "true")
     vi.stubEnv("ENABLE_ELEVENLABS", "true")
     vi.stubEnv("ELEVENLABS_PREMIUM", "true")
+    vi.stubEnv("OPENAI_API_KEY", "sk-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
   })
 
   it("routes to ElevenLabs when both flags set, even for Indian language", async () => {
@@ -116,6 +168,8 @@ describe("routeTranscription — null language", () => {
     vi.resetModules()
     vi.stubEnv("ENABLE_SARVAM", "false")
     vi.stubEnv("ENABLE_ELEVENLABS", "false")
+    vi.stubEnv("OPENAI_API_KEY", "sk-test")
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "")
   })
 
   it("defaults to OpenAI when language is null", async () => {

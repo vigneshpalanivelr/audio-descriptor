@@ -22,6 +22,7 @@ LOG_FILE="logs/server.log"
 APP_NAME="QuillCast"
 APP_URL="${NEXT_PUBLIC_APP_URL:-http://localhost:3000}"
 ADMIN_PATH="/admin"
+SUPABASE_API_PORT=54321
 
 # ─── Banner helpers ───────────────────────────────────────────────────────────
 info()    { echo "  ${C}ℹ${RST}  $*"; }
@@ -146,7 +147,7 @@ load_env() {
   if [[ -f ".env.local" ]]; then
     set -a
     # shellcheck disable=SC1091
-    source <(grep -E '^[A-Z_][A-Z0-9_]*=.' .env.local | grep -v '^#') 2>/dev/null || true
+    source .env.local 2>/dev/null || true
     set +a
   fi
 }
@@ -169,6 +170,74 @@ flag_color() {
   fi
 }
 
+# ─── Platform / dependency helpers ───────────────────────────────────────────
+
+is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+
+# Ensure Docker daemon is running; install Docker Desktop on macOS if missing.
+ensure_docker_running() {
+  if timeout 5 docker info >/dev/null 2>&1; then
+    printf "  ${DIM}  %-18s${RST} %b\n" "Docker" "${BG}running${RST}"
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    if is_macos && command -v brew >/dev/null 2>&1; then
+      info "Docker Desktop not found — installing via Homebrew (this may take a few minutes)…"
+      brew install --cask docker
+    elif is_macos; then
+      error "Docker Desktop is not installed and Homebrew is not available."
+      info "Install Homebrew first: https://brew.sh  then re-run ./manage.sh install"
+      return 1
+    else
+      error "Docker Desktop is not installed."
+      info "Install Docker Desktop: https://www.docker.com/products/docker-desktop/"
+      return 1
+    fi
+  fi
+
+  if is_macos; then
+    info "Starting Docker Desktop…"
+    open -a Docker 2>/dev/null || true
+    local elapsed=0
+    spin_start "Waiting for Docker daemon (up to 90 s)"
+    while ! docker info >/dev/null 2>&1; do
+      if [[ $elapsed -ge 90 ]]; then
+        spin_stop "fail"
+        error "Docker did not start within 90 s."
+        info "Open Docker Desktop manually, wait for the whale icon to stop animating, then re-run."
+        return 1
+      fi
+      sleep 3
+      elapsed=$((elapsed + 3))
+    done
+    spin_stop "ok"
+  else
+    error "Docker daemon is not running. Start it and retry."
+    return 1
+  fi
+}
+
+# Ensure Supabase CLI is installed; auto-install via Homebrew / Scoop if possible.
+ensure_supabase_cli() {
+  if command -v supabase >/dev/null 2>&1; then
+    printf "  ${DIM}  %-18s${RST} %b\n" "Supabase CLI" "${BG}$(supabase --version 2>/dev/null | head -1)${RST}"
+    return 0
+  fi
+  if is_macos && command -v brew >/dev/null 2>&1; then
+    info "Supabase CLI not found — installing via Homebrew…"
+    brew install supabase/tap/supabase
+  elif command -v scoop >/dev/null 2>&1; then
+    info "Supabase CLI not found — installing via Scoop…"
+    scoop install supabase
+  else
+    error "Supabase CLI not found and no package manager available."
+    info "Install: brew install supabase/tap/supabase"
+    info "Or visit: https://supabase.com/docs/guides/cli"
+    return 1
+  fi
+}
+
 # ─── Config (redacted) ────────────────────────────────────────────────────────
 show_config() {
   load_env
@@ -185,6 +254,12 @@ show_config() {
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_URL"     "${NEXT_PUBLIC_SUPABASE_URL:-(not set)}"
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY" "$(redact "${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}")"
   printf "    ${DIM}%-36s${RST} %b\n" "SUPABASE_SERVICE_ROLE_KEY"    "$(redact "${SUPABASE_SERVICE_ROLE_KEY:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "SUPABASE_PROJECT_REF"         "${SUPABASE_PROJECT_REF:-(not set)}"
+
+  echo ""
+  echo "  ${BD}OAuth${RST}"
+  printf "    ${DIM}%-36s${RST} %b\n" "GOOGLE_CLIENT_ID"     "$(redact "${GOOGLE_CLIENT_ID:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "GOOGLE_CLIENT_SECRET" "$(redact "${GOOGLE_CLIENT_SECRET:-}")"
 
   echo ""
   echo "  ${BD}LLM / STT APIs${RST}"
@@ -195,11 +270,22 @@ show_config() {
   printf "    ${DIM}%-36s${RST} %b\n" "GOOGLE_GEMINI_API_KEY" "$(redact "${GOOGLE_GEMINI_API_KEY:-}")"
 
   echo ""
-  echo "  ${BD}Payments${RST}"
-  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_KEY_ID"      "$(redact "${RAZORPAY_KEY_ID:-}")"
-  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_KEY_SECRET"  "$(redact "${RAZORPAY_KEY_SECRET:-}")"
-  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_API_KEY" "$(redact "${LEMONSQUEEZY_API_KEY:-}")"
-  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_STORE_ID" "${LEMONSQUEEZY_STORE_ID:-(not set)}"
+  echo "  ${BD}Payments — Razorpay (INR)${RST}"
+  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_KEY_ID"             "$(redact "${RAZORPAY_KEY_ID:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_KEY_SECRET"         "$(redact "${RAZORPAY_KEY_SECRET:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_WEBHOOK_SECRET"     "$(redact "${RAZORPAY_WEBHOOK_SECRET:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_PLAN_STARTER"       "${RAZORPAY_PLAN_STARTER:-(not set)}"
+  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_PLAN_PRO"           "${RAZORPAY_PLAN_PRO:-(not set)}"
+  printf "    ${DIM}%-36s${RST} %b\n" "RAZORPAY_PLAN_PRO_PLUS_LOCAL" "${RAZORPAY_PLAN_PRO_PLUS_LOCAL:-(not set)}"
+
+  echo ""
+  echo "  ${BD}Payments — Lemon Squeezy (USD)${RST}"
+  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_API_KEY"            "$(redact "${LEMONSQUEEZY_API_KEY:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_STORE_ID"           "${LEMONSQUEEZY_STORE_ID:-(not set)}"
+  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_WEBHOOK_SECRET"     "$(redact "${LEMONSQUEEZY_WEBHOOK_SECRET:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_VARIANT_STARTER"    "${LEMONSQUEEZY_VARIANT_STARTER:-(not set)}"
+  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_VARIANT_PRO"        "${LEMONSQUEEZY_VARIANT_PRO:-(not set)}"
+  printf "    ${DIM}%-36s${RST} %b\n" "LEMONSQUEEZY_VARIANT_PRO_PLUS_LOCAL" "${LEMONSQUEEZY_VARIANT_PRO_PLUS_LOCAL:-(not set)}"
 
   echo ""
   echo "  ${BD}Feature Flags${RST}"
@@ -210,12 +296,202 @@ show_config() {
   echo ""
   echo "  ${BD}Observability${RST}"
   printf "    ${DIM}%-36s${RST} %b\n" "SENTRY_DSN"              "$(redact "${SENTRY_DSN:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_SENTRY_DSN"  "$(redact "${NEXT_PUBLIC_SENTRY_DSN:-}")"
   printf "    ${DIM}%-36s${RST} %b\n" "NEXT_PUBLIC_POSTHOG_KEY" "$(redact "${NEXT_PUBLIC_POSTHOG_KEY:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "RESEND_API_KEY"          "$(redact "${RESEND_API_KEY:-}")"
+  printf "    ${DIM}%-36s${RST} %b\n" "DIGEST_EMAIL"            "${DIGEST_EMAIL:-(uses FROM_EMAIL)}"
 
   echo ""
   echo "  ${BD}Background Jobs (Inngest)${RST}"
   printf "    ${DIM}%-36s${RST} %b\n" "INNGEST_EVENT_KEY"  "$(redact "${INNGEST_EVENT_KEY:-}")"
   printf "    ${DIM}%-36s${RST} %b\n" "INNGEST_SIGNING_KEY" "$(redact "${INNGEST_SIGNING_KEY:-}")"
+  echo ""
+}
+
+# ─── Supabase helpers ────────────────────────────────────────────────────────
+
+supabase_is_running() {
+  nc -z 127.0.0.1 "$SUPABASE_API_PORT" 2>/dev/null
+}
+
+# Returns 0 (true) when NEXT_PUBLIC_SUPABASE_URL is a remote Supabase host.
+# Local URLs are 127.x or localhost; anything else is treated as remote.
+is_remote_supabase() {
+  local url="${NEXT_PUBLIC_SUPABASE_URL:-}"
+  [[ -n "$url" ]] && [[ ! "$url" =~ ^https?://(127\.|localhost) ]]
+}
+
+# Auto-link the Supabase CLI to the remote project when SUPABASE_PROJECT_REF is set.
+maybe_supabase_link() {
+  local ref="${SUPABASE_PROJECT_REF:-}"
+  [[ -z "$ref" ]] && return 0
+  if ! command -v supabase >/dev/null 2>&1; then
+    warn "supabase CLI not found — skipping auto-link for project ${BD}${ref}${RST}"
+    return 0
+  fi
+  info "Auto-linking Supabase project ${BD}${ref}${RST}…"
+  if supabase link --project-ref "$ref" 2>&1 | colorize_output; then
+    success "Supabase project linked: ${BD}${ref}${RST}"
+  else
+    warn "supabase link failed — run manually: ${BD}supabase link --project-ref ${ref}${RST}"
+  fi
+}
+
+# Set KEY=VALUE in .env.local only when the current value is absent or empty.
+env_set_if_empty() {
+  local key="$1" val="$2" file="${3:-.env.local}"
+  [[ -f "$file" ]] || return 0
+  local current
+  current=$(grep "^${key}=" "$file" 2>/dev/null | cut -d= -f2- || true)
+  if [[ -z "$current" ]]; then
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+      sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    else
+      printf "\n%s=%s" "$key" "$val" >> "$file"
+    fi
+    success "Auto-set ${BD}${key}${RST} in .env.local"
+  fi
+}
+
+# Parse output of `supabase start` and auto-fill .env.local
+supabase_parse_and_patch() {
+  local output="$1"
+  local api_url anon_key service_key
+  api_url=$(printf "%s"    "$output" | grep "API URL:"          | sed 's/.*API URL:[[:space:]]*//')
+  anon_key=$(printf "%s"   "$output" | grep "anon key:"         | sed 's/.*anon key:[[:space:]]*//')
+  service_key=$(printf "%s" "$output" | grep "service_role key:" | sed 's/.*service_role key:[[:space:]]*//')
+  [[ -n "$api_url"     ]] && env_set_if_empty "NEXT_PUBLIC_SUPABASE_URL"       "$api_url"
+  [[ -n "$anon_key"    ]] && env_set_if_empty "NEXT_PUBLIC_SUPABASE_ANON_KEY"  "$anon_key"
+  [[ -n "$service_key" ]] && env_set_if_empty "SUPABASE_SERVICE_ROLE_KEY"      "$service_key"
+  [[ -n "$anon_key" ]] && load_env  # reload so next cmd sees fresh values
+}
+
+supabase_do_start() {
+  header "🗄  Starting local Supabase stack"
+  local tmpfile
+  tmpfile=$(mktemp)
+  # Stream output live AND capture it for key parsing
+  supabase start 2>&1 | tee "$tmpfile" | colorize_output
+  echo ""
+  supabase_parse_and_patch "$(cat "$tmpfile")"
+  rm -f "$tmpfile"
+}
+
+supabase_do_push() {
+  run_cmd "Apply pending DB migrations" supabase db push
+}
+
+# Idempotent: auto-installs CLI + Docker if needed, then starts Supabase and
+# applies pending migrations. Soft-fails with a warning when automation is not
+# possible (e.g. non-macOS without package manager) so dev/start still proceed.
+ensure_supabase() {
+  if is_remote_supabase; then
+    info "Remote Supabase detected → ${BC}${NEXT_PUBLIC_SUPABASE_URL}${RST}"
+    info "Skipping local Docker stack."
+    maybe_supabase_link
+    return 0
+  fi
+
+  ensure_supabase_cli || { warn "Supabase CLI unavailable — skipping local DB setup"; return 0; }
+  ensure_docker_running || { warn "Docker unavailable — skipping local DB setup"; return 0; }
+
+  if supabase_is_running; then
+    info "Supabase stack already running on :${SUPABASE_API_PORT}"
+  else
+    supabase_do_start
+  fi
+  supabase_do_push
+}
+
+# ─── db command ───────────────────────────────────────────────────────────────
+
+cmd_db() {
+  local sub="${1:-status}"
+
+  case "$sub" in
+    start)
+      header "🗄  Supabase — start"
+      if is_remote_supabase; then
+        info "Remote Supabase detected → ${BC}${NEXT_PUBLIC_SUPABASE_URL}${RST}"
+        info "Use ${BD}./manage.sh db remote${RST} to push migrations to your remote project."
+        echo ""
+        exit 0
+      fi
+      if ! command -v supabase >/dev/null 2>&1; then
+        error "supabase CLI not found. Install: brew install supabase/tap/supabase"
+        exit 1
+      fi
+      if ! timeout 5 docker info >/dev/null 2>&1; then
+        error "Docker is not running. Start Docker Desktop first."
+        exit 1
+      fi
+      if supabase_is_running; then
+        info "Supabase stack is already running on :${SUPABASE_API_PORT}"
+      else
+        supabase_do_start
+      fi
+      supabase_do_push
+      ;;
+
+    stop)
+      header "🗄  Supabase — stop"
+      warn "Stopping Supabase preserves the local DB in its Docker volume."
+      warn "However, if Docker Desktop restarts or volumes are pruned, ${BR}all local data will be lost${RST}${BY}."
+      info "For persistent data use a remote Supabase project: ${BD}supabase link${RST}"
+      run_cmd "Stop Supabase" supabase stop
+      ;;
+
+    push|migrate)
+      header "🗄  Supabase — apply migrations (local)"
+      run_cmd "Apply pending migrations (supabase db push)" supabase db push
+      ;;
+
+    remote)
+      header "🗄  Supabase — apply migrations (remote/production)"
+      warn "This targets your ${BD}linked remote${RST} project. Ensure you are linked: ${BD}supabase link${RST}"
+      run_cmd "Apply remote migrations (supabase migration up)" supabase migration up
+      ;;
+
+    reset)
+      header "🗄  Supabase — reset local DB"
+      warn "This will ${BR}DROP and recreate all tables${RST} in the local DB."
+      read -rp "  Are you sure? [y/N] " _confirm
+      if [[ "${_confirm,,}" == "y" ]]; then
+        run_cmd "Reset local DB" supabase db reset
+      else
+        info "Aborted."
+      fi
+      ;;
+
+    status)
+      header "🗄  Supabase — status"
+      if supabase_is_running; then
+        success "Local Supabase stack is ${BG}running${RST}"
+        printf "  ${DIM}  %-14s${RST} %b\n" "API"    "${BC}http://localhost:54321${RST}"
+        printf "  ${DIM}  %-14s${RST} %b\n" "Studio" "${BC}http://localhost:54323${RST}"
+        printf "  ${DIM}  %-14s${RST} %b\n" "DB"     "${DIM}postgresql://postgres:postgres@localhost:54322/postgres${RST}"
+      else
+        warn "Local Supabase stack is ${Y}not running${RST}"
+        info "Run ${BD}./manage.sh db start${RST} to start it"
+      fi
+      echo ""
+      ;;
+
+    *)
+      error "Unknown db subcommand: ${sub}"
+      echo ""
+      echo "  Usage: ${BD}./manage.sh db [start|stop|push|migrate|reset|remote|status]${RST}"
+      echo ""
+      echo "    ${DIM}start   ${RST}  Start local stack + apply pending migrations"
+      echo "    ${DIM}stop    ${RST}  Stop local stack"
+      echo "    ${DIM}push    ${RST}  Apply pending migrations to local DB  ${DIM}(alias: migrate)${RST}"
+      echo "    ${DIM}remote  ${RST}  Apply pending migrations to linked remote project"
+      echo "    ${DIM}reset   ${RST}  Drop and recreate local DB from migrations  ${DIM}(destructive)${RST}"
+      echo "    ${DIM}status  ${RST}  Check whether local stack is running"
+      echo ""
+      exit 1
+      ;;
+  esac
   echo ""
 }
 
@@ -255,7 +531,20 @@ cmd_start() {
     rm -f "$PID_FILE"
   fi
 
+  ensure_supabase
+
   mkdir -p logs
+
+  if [[ "$mode" == "dev" ]]; then
+    if nc -z 127.0.0.1 8288 2>/dev/null; then
+      export INNGEST_DEV=1
+      info "Inngest dev server detected on :8288 → INNGEST_DEV=1"
+    else
+      unset INNGEST_DEV
+      info "Inngest dev server not running — notes will be processed via direct fallback"
+      info "To use Inngest queuing: run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal"
+    fi
+  fi
 
   if [[ "$mode" == "prod" ]]; then
     if [[ ! -d ".next" ]]; then
@@ -267,8 +556,8 @@ cmd_start() {
     nohup pnpm start >"$LOG_FILE" 2>&1 &
   else
     echo ""
-    echo "  ${DIM}\$${RST} ${BC}pnpm dev  ${DIM}(background)${RST}"
-    nohup pnpm dev >"$LOG_FILE" 2>&1 &
+    echo "  ${DIM}\$${RST} ${BC}pnpm run dev:next  ${DIM}(background)${RST}"
+    nohup pnpm run dev:next >"$LOG_FILE" 2>&1 &
   fi
 
   local pid=$!
@@ -298,6 +587,28 @@ cmd_start() {
     warn "Server did not respond within 15 s — check ${LOG_FILE}"
   fi
   echo ""
+}
+
+# ─── dev (foreground — the normal developer workflow) ────────────────────────
+cmd_dev() {
+  show_config
+  ensure_supabase
+
+  mkdir -p logs
+
+  if nc -z 127.0.0.1 8288 2>/dev/null; then
+    export INNGEST_DEV=1
+    info "Inngest dev server detected on :8288 → INNGEST_DEV=1"
+  else
+    unset INNGEST_DEV
+    info "Inngest dev server not running — notes will be processed via direct fallback"
+    info "To use Inngest queuing: run ${BD}npx inngest-cli@latest dev${RST} in a separate terminal"
+  fi
+
+  header "🚀  ${APP_NAME} dev server — ${BC}${APP_URL}${RST}  (Ctrl-C to stop)"
+  echo ""
+  # exec replaces this shell process so Ctrl-C goes straight to next dev
+  exec node_modules/.bin/next dev
 }
 
 # ─── stop ─────────────────────────────────────────────────────────────────────
@@ -450,83 +761,62 @@ cmd_test() {
 cmd_install() {
   header "📦  Installing ${APP_NAME}"
 
-  # ── 1. Prerequisites check ──────────────────────────────────────────────────
+  # ── 1. Node.js + pnpm (must be pre-installed) ───────────────────────────────
   echo ""
   echo "  ${BD}Checking prerequisites${RST}"
 
-  local node_ok=true pnpm_ok=true docker_ok=true
   local node_ver pnpm_ver
-
   node_ver=$(node -v 2>/dev/null || echo "")
   if [[ -z "$node_ver" ]]; then
-    error "Node.js not found. Install Node 22 via nvm: nvm install 22 && nvm use 22"
-    node_ok=false
-  else
-    printf "  ${DIM}  %-18s${RST} %b\n" "Node.js" "${BG}${node_ver}${RST}"
+    error "Node.js not found. Install Node 22: nvm install 22 && nvm use 22"
+    exit 1
   fi
+  printf "  ${DIM}  %-18s${RST} %b\n" "Node.js" "${BG}${node_ver}${RST}"
 
   pnpm_ver=$(pnpm -v 2>/dev/null || echo "")
   if [[ -z "$pnpm_ver" ]]; then
     error "pnpm not found. Install: npm i -g pnpm"
-    pnpm_ok=false
-  else
-    printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
-  fi
-
-  if ! docker info >/dev/null 2>&1; then
-    warn "Docker not running — Supabase local stack requires Docker Desktop."
-    docker_ok=false
-  else
-    printf "  ${DIM}  %-18s${RST} %b\n" "Docker" "${BG}running${RST}"
-  fi
-
-  if [[ "$node_ok" == "false" || "$pnpm_ok" == "false" ]]; then
-    echo ""
-    error "Install missing prerequisites above, then re-run ./manage.sh install"
     exit 1
   fi
+  printf "  ${DIM}  %-18s${RST} %b\n" "pnpm" "${BG}${pnpm_ver}${RST}"
 
-  # ── 2. pnpm install ─────────────────────────────────────────────────────────
+  # ── 2. Docker — auto-install + start ────────────────────────────────────────
+  echo ""
+  echo "  ${BD}Docker${RST}"
+  ensure_docker_running || exit 1
+
+  # ── 3. Supabase CLI — auto-install ──────────────────────────────────────────
+  echo ""
+  echo "  ${BD}Supabase CLI${RST}"
+  ensure_supabase_cli || exit 1
+
+  # ── 4. Node dependencies ────────────────────────────────────────────────────
   run_cmd "Install Node dependencies" pnpm install
 
-  # ── 3. .env.local ───────────────────────────────────────────────────────────
+  # ── 5. .env.local ───────────────────────────────────────────────────────────
   echo ""
   if [[ ! -f ".env.local" ]]; then
     cp .env.example .env.local
     success "Created ${BD}.env.local${RST} from .env.example"
-    warn "Edit ${BD}.env.local${RST} and fill in your keys before starting the server."
   else
     info ".env.local already exists — skipping copy."
   fi
 
-  # ── 4. Supabase (optional) ──────────────────────────────────────────────────
-  echo ""
-  if [[ "$docker_ok" == "true" ]] && command -v supabase >/dev/null 2>&1; then
-    echo "  ${BD}Local Supabase${RST}  ${DIM}(Docker is running)${RST}"
-    echo ""
-    echo "  Run these commands to start the local DB and apply the schema:"
-    echo ""
-    echo "    ${DIM}supabase start          ${RST}  # starts Postgres + Auth + Storage"
-    echo "    ${DIM}supabase db push        ${RST}  # applies migrations from supabase/migrations/"
-    echo ""
-    echo "  After ${BD}supabase start${RST} prints the local keys, paste them into ${BD}.env.local${RST}:"
-    echo ""
-    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321${RST}"
-    echo "    ${DIM}NEXT_PUBLIC_SUPABASE_ANON_KEY=<printed anon key>${RST}"
-    echo "    ${DIM}SUPABASE_SERVICE_ROLE_KEY=<printed service role key>${RST}"
-  else
-    warn "supabase CLI not found or Docker not running."
-    echo "  ${DIM}  Install: brew install supabase/tap/supabase  (Mac)${RST}"
-    echo "  ${DIM}         or: https://supabase.com/docs/guides/cli${RST}"
-  fi
+  # ── 6. Supabase start + migrations (fully automatic) ────────────────────────
+  ensure_supabase
 
-  # ── 5. Summary ──────────────────────────────────────────────────────────────
+  # ── 7. Summary ──────────────────────────────────────────────────────────────
+  echo ""
+  divider
+  success "${BD}Installation complete!${RST}"
   echo ""
   echo "  ${BD}Next steps${RST}"
-  echo "  ${DIM}  1.${RST}  Fill in ${BD}.env.local${RST}  (minimum: ANTHROPIC_API_KEY)"
-  echo "  ${DIM}  2.${RST}  ${BD}supabase start && supabase db push${RST}  (local DB)"
-  echo "  ${DIM}  3.${RST}  ${BD}./manage.sh start${RST}  (dev server at http://localhost:3000)"
-  echo "  ${DIM}  4.${RST}  ${BD}./manage.sh admin${RST}  (admin console info)"
+  echo "  ${DIM}  1.${RST}  Edit ${BD}.env.local${RST} — fill in your API keys:"
+  printf "  ${DIM}     %-38s${RST} %b\n" "ANTHROPIC_API_KEY" "${DIM}(required for LLM)${RST}"
+  printf "  ${DIM}     %-38s${RST} %b\n" "NEXT_PUBLIC_SUPABASE_ANON_KEY" "${DIM}(auto-filled above if Supabase started)${RST}"
+  printf "  ${DIM}     %-38s${RST} %b\n" "SUPABASE_SERVICE_ROLE_KEY" "${DIM}(auto-filled above if Supabase started)${RST}"
+  echo "  ${DIM}  2.${RST}  ${BG}pnpm dev${RST}  — starts Supabase (if needed) + Next.js"
+  echo "  ${DIM}  3.${RST}  Open ${BC}${APP_URL}${RST}"
   echo ""
 }
 
@@ -535,32 +825,43 @@ cmd_help() {
   cat <<EOF
 
   ${BD}Setup${RST}
-  ${DIM}  install            ${RST}  Check prereqs, pnpm install, create .env.local
+  ${DIM}  install              ${RST}  Check prereqs, pnpm install, create .env.local
 
   ${BD}Server${RST}
-  ${DIM}  start [dev|prod]   ${RST}  Start server ${DIM}(default: dev)${RST}
-  ${DIM}  stop               ${RST}  Stop the running server
-  ${DIM}  restart [dev|prod] ${RST}  Stop → show config → start
-  ${DIM}  build              ${RST}  Production build ${DIM}(shows config first)${RST}
-  ${DIM}  status             ${RST}  PID, URL, admin link
-  ${DIM}  logs               ${RST}  Tail ${LOG_FILE} with colour
+  ${DIM}  dev                  ${RST}  ${BG}Normal dev workflow${RST}: ensure Supabase → migrations → next dev ${DIM}(foreground)${RST}
+  ${DIM}  start [dev|prod]     ${RST}  Same as dev but runs in background with PID file ${DIM}(default: dev)${RST}
+  ${DIM}  stop                 ${RST}  Stop the running app server
+  ${DIM}  restart [dev|prod]   ${RST}  Stop → show config → ensure Supabase → start
+  ${DIM}  build                ${RST}  Production build ${DIM}(shows config first)${RST}
+  ${DIM}  status               ${RST}  PID, URL, admin link
+  ${DIM}  logs                 ${RST}  Tail ${LOG_FILE} with colour
+
+  ${BD}Database (Supabase)${RST}
+  ${DIM}  db start             ${RST}  Start local Supabase stack + apply pending migrations
+  ${DIM}  db stop              ${RST}  Stop local Supabase stack
+  ${DIM}  db push              ${RST}  Apply pending migrations to local DB ${DIM}(alias: db migrate)${RST}
+  ${DIM}  db remote            ${RST}  Apply pending migrations to linked remote project
+  ${DIM}  db reset             ${RST}  Drop + recreate local DB from scratch ${DIM}(destructive!)${RST}
+  ${DIM}  db status            ${RST}  Check whether local stack is running
 
   ${BD}Info${RST}
-  ${DIM}  config             ${RST}  All env vars, secrets redacted
-  ${DIM}  stats              ${RST}  Build ID, memory, last test run
-  ${DIM}  admin              ${RST}  Admin URL + SQL + local dev services
+  ${DIM}  config               ${RST}  All env vars, secrets redacted
+  ${DIM}  stats                ${RST}  Build ID, memory, last test run
+  ${DIM}  admin                ${RST}  Admin URL + SQL + local dev services
 
   ${BD}Tests${RST}
-  ${DIM}  test [suite]       ${RST}  unit | coverage | security | e2e | all ${DIM}(default: all)${RST}
+  ${DIM}  test [suite]         ${RST}  unit | coverage | security | e2e | all ${DIM}(default: all)${RST}
 
   ${BD}Examples${RST}
-  ${DIM}  ./manage.sh start            ${RST}  # dev server
-  ${DIM}  ./manage.sh start prod       ${RST}  # serve production build
-  ${DIM}  ./manage.sh restart          ${RST}  # restart dev (config shown first)
-  ${DIM}  ./manage.sh test coverage    ${RST}  # coverage report
-  ${DIM}  ./manage.sh config           ${RST}  # redacted env dump
-  ${DIM}  ./manage.sh stats            ${RST}  # build + server + test summary
-  ${DIM}  ./manage.sh admin            ${RST}  # console URL + access instructions
+  ${DIM}  ./manage.sh start              ${RST}  # auto-start Supabase, apply migrations, then dev server
+  ${DIM}  ./manage.sh start prod         ${RST}  # same but serve production build
+  ${DIM}  ./manage.sh restart            ${RST}  # restart dev (Supabase + migrations checked first)
+  ${DIM}  ./manage.sh db push            ${RST}  # apply new migrations without restarting app
+  ${DIM}  ./manage.sh db remote          ${RST}  # push migrations to production
+  ${DIM}  ./manage.sh db reset           ${RST}  # nuke + rebuild local DB (dev only)
+  ${DIM}  ./manage.sh test coverage      ${RST}  # coverage report
+  ${DIM}  ./manage.sh config             ${RST}  # redacted env dump
+  ${DIM}  ./manage.sh admin              ${RST}  # console URL + access instructions
 
 EOF
 }
@@ -569,17 +870,19 @@ EOF
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   COMMAND="${1:-help}"
   case "$COMMAND" in
-    install) cmd_install ;;
-    start)   cmd_start   "${2:-dev}" ;;
-    stop)    cmd_stop ;;
-    restart) cmd_restart "${2:-dev}" ;;
-    build)   cmd_build ;;
-    status)  cmd_status ;;
-    logs)    cmd_logs ;;
-    config)  show_config ;;
-    stats)   cmd_stats ;;
-    admin)   cmd_admin ;;
-    test)    cmd_test "${2:-all}" ;;
+    install)  cmd_install ;;
+    dev)      cmd_dev ;;
+    start)    cmd_start   "${2:-dev}" ;;
+    stop)     cmd_stop ;;
+    restart)  cmd_restart "${2:-dev}" ;;
+    build)    cmd_build ;;
+    status)   cmd_status ;;
+    logs)     cmd_logs ;;
+    config)   show_config ;;
+    stats)    cmd_stats ;;
+    admin)    cmd_admin ;;
+    test)     cmd_test "${2:-all}" ;;
+    db)       cmd_db "${2:-status}" ;;
     help|--help|-h) cmd_help ;;
     *)
       error "Unknown command: ${COMMAND}"

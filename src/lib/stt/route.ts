@@ -17,6 +17,15 @@ export async function routeTranscription(request: TranscribeRequest): Promise<Tr
     return transcribeWithSarvam(request)
   }
 
-  const { transcribeWithOpenAI } = await import("./openai")
-  return transcribeWithOpenAI(request)
+  if (process.env["OPENAI_API_KEY"]) {
+    const { transcribeWithOpenAI } = await import("./openai")
+    return transcribeWithOpenAI(request)
+  }
+
+  if (process.env["GOOGLE_GEMINI_API_KEY"]) {
+    const { transcribeWithGemini } = await import("./gemini")
+    return transcribeWithGemini(request)
+  }
+
+  throw new Error("No STT provider configured. Set OPENAI_API_KEY or GOOGLE_GEMINI_API_KEY.")
 }

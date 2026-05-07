@@ -1,6 +1,7 @@
 export type UserTier = "free" | "starter" | "pro" | "pro_plus_local"
 export type NoteStatus = "pending" | "transcribing" | "cleaning" | "ready" | "failed"
 export type NoteIntensity = "verbatim" | "light" | "full"
+export type NoteVersionIntensity = NoteIntensity | "custom"
 export type SttEngine = "openai" | "sarvam" | "elevenlabs" | "whisper_local"
 export type LlmModel = "claude-haiku-4-5" | "claude-sonnet-4-6" | "gemini-3-flash" | "sarvam-105b"
 export type SubscriptionProvider = "razorpay" | "lemonsqueezy"
@@ -31,6 +32,7 @@ export interface Note {
   language_detected: string | null
   language_output: string | null
   intensity: NoteIntensity | null
+  custom_prompt: string | null
   stt_engine: SttEngine | null
   llm_model: LlmModel | null
   status: NoteStatus
@@ -41,6 +43,18 @@ export interface Note {
   is_archived: boolean
   created_at: string
   ready_at: string | null
+}
+
+export interface NoteVersion {
+  id: string
+  note_id: string
+  user_id: string
+  intensity: NoteVersionIntensity | null
+  custom_prompt: string | null
+  summary: string
+  llm_model: string | null
+  cost_usd: number | null
+  created_at: string
 }
 
 export interface UsageRecord {
